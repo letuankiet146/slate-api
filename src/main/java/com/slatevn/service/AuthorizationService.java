@@ -31,6 +31,12 @@ public class AuthorizationService {
     }
 
     @Transactional(readOnly = true)
+    public boolean isSystemAdmin(UUID userId) {
+        return membershipRepository.findByUserIdAndScopeType(userId, ScopeType.SYSTEM).stream()
+                .anyMatch(m -> RoleCodes.SYSTEM_ADMIN.equals(m.getRole().getCode()));
+    }
+
+    @Transactional(readOnly = true)
     public boolean hasSystemPermission(UUID userId, String permissionCode) {
         return membershipRepository.findByUserIdAndScopeType(userId, ScopeType.SYSTEM).stream()
                 .flatMap(m -> m.getRole().getPermissions().stream())

@@ -10,6 +10,7 @@ public record MembershipDto(
         String roleCode,
         String scopeType,
         UUID workspaceId,
-        UUID boardId
+        UUID boardId,
+        boolean systemAdmin
 ) {
 }

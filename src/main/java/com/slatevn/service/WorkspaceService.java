@@ -235,6 +235,10 @@ public class WorkspaceService {
         if (!workspaceId.equals(membership.getWorkspaceId())) {
             throw new BadRequestException("Membership does not belong to workspace");
         }
+        if (authorizationService.isSystemAdmin(membership.getUser().getId())
+                && !authorizationService.isSystemAdmin(actorId)) {
+            throw new com.slatevn.web.ForbiddenException("Only system administrators can remove system administrators");
+        }
         membershipRepository.delete(membership);
     }
 
@@ -292,7 +296,8 @@ public class WorkspaceService {
                 m.getRole().getCode(),
                 m.getScopeType().name(),
                 m.getWorkspaceId(),
-                m.getBoardId()
+                m.getBoardId(),
+                authorizationService.isSystemAdmin(m.getUser().getId())
         );
     }
 }

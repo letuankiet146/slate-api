@@ -3,6 +3,7 @@ package com.slatevn.service;
 import com.slatevn.domain.Membership;
 import com.slatevn.domain.PermissionCodes;
 import com.slatevn.domain.Role;
+import com.slatevn.domain.RoleCodes;
 import com.slatevn.domain.ScopeType;
 import com.slatevn.domain.User;
 import com.slatevn.dto.CreateUserRequest;
@@ -10,6 +11,7 @@ import com.slatevn.dto.UpdateUserRequest;
 import com.slatevn.dto.UserDto;
 import com.slatevn.repository.BoardRepository;
 import com.slatevn.repository.MembershipRepository;
+import com.slatevn.repository.RefreshTokenRepository;
 import com.slatevn.repository.RoleRepository;
 import com.slatevn.repository.TaskRepository;
 import com.slatevn.repository.UserRepository;
@@ -33,6 +35,7 @@ public class UserService {
     private final WorkspaceRepository workspaceRepository;
     private final BoardRepository boardRepository;
     private final TaskRepository taskRepository;
+    private final RefreshTokenRepository refreshTokenRepository;
     private final AuthorizationService authorizationService;
     private final PasswordEncoder passwordEncoder;
 
@@ -43,6 +46,7 @@ public class UserService {
             WorkspaceRepository workspaceRepository,
             BoardRepository boardRepository,
             TaskRepository taskRepository,
+            RefreshTokenRepository refreshTokenRepository,
             AuthorizationService authorizationService,
             PasswordEncoder passwordEncoder
     ) {
@@ -52,6 +56,7 @@ public class UserService {
         this.workspaceRepository = workspaceRepository;
         this.boardRepository = boardRepository;
         this.taskRepository = taskRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
         this.authorizationService = authorizationService;
         this.passwordEncoder = passwordEncoder;
     }
@@ -122,9 +127,9 @@ public class UserService {
         }
         User user = userRepository.findById(id).orElseThrow(() -> new NotFoundException("User not found"));
         boolean isSystemAdmin = membershipRepository.findByUserIdAndScopeType(id, ScopeType.SYSTEM).stream()
-                .anyMatch(m -> "SYSTEM_ADMIN".equals(m.getRole().getCode()));
+                .anyMatch(m -> RoleCodes.SYSTEM_ADMIN.equals(m.getRole().getCode()));
         if (isSystemAdmin
-                && membershipRepository.countByScopeTypeAndRole_Code(ScopeType.SYSTEM, "SYSTEM_ADMIN") <= 1) {
+                && membershipRepository.countByScopeTypeAndRole_Code(ScopeType.SYSTEM, RoleCodes.SYSTEM_ADMIN) <= 1) {
             throw new BadRequestException("Cannot delete the last system administrator");
         }
 
@@ -136,6 +141,8 @@ public class UserService {
         boardRepository.findByDeletedBy(id).forEach(board -> board.setDeletedBy(null));
         taskRepository.findByDeletedBy(id).forEach(task -> task.setDeletedBy(null));
 
+        membershipRepository.deleteAll(membershipRepository.findByUserId(id));
+        refreshTokenRepository.deleteByUserId(id);
         userRepository.delete(user);
     }
 

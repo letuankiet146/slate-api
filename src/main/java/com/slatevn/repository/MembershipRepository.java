@@ -36,4 +36,13 @@ public interface MembershipRepository extends JpaRepository<Membership, UUID> {
     List<Membership> findByUserIdAndScopeType(UUID userId, ScopeType scopeType);
 
     long countByScopeTypeAndRole_Code(ScopeType scopeType, String roleCode);
+
+    boolean existsByRole_Id(UUID roleId);
+
+    @Query("""
+            SELECT DISTINCT m.user.id FROM Membership m
+            WHERE m.scopeType = com.slatevn.domain.ScopeType.SYSTEM
+              AND m.role.code = :roleCode
+            """)
+    List<UUID> findUserIdsBySystemRoleCode(@Param("roleCode") String roleCode);
 }

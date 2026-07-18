@@ -1,5 +1,8 @@
 package com.slatevn.service;
 
+import com.slatevn.domain.ActivityAction;
+import com.slatevn.domain.ActivityEntityType;
+import com.slatevn.domain.ActivityScopeLevel;
 import com.slatevn.domain.Board;
 import com.slatevn.domain.BoardColumn;
 import com.slatevn.domain.FieldDefinition;
@@ -57,6 +60,7 @@ public class BoardService {
     private final MembershipRepository membershipRepository;
     private final AuthorizationService authorizationService;
     private final TaskTemplateService taskTemplateService;
+    private final ActivityLogService activityLogService;
 
     public BoardService(
             BoardRepository boardRepository,
@@ -68,7 +72,8 @@ public class BoardService {
             TaskTemplateRepository templateRepository,
             MembershipRepository membershipRepository,
             AuthorizationService authorizationService,
-            TaskTemplateService taskTemplateService
+            TaskTemplateService taskTemplateService,
+            ActivityLogService activityLogService
     ) {
         this.boardRepository = boardRepository;
         this.workspaceRepository = workspaceRepository;
@@ -80,6 +85,7 @@ public class BoardService {
         this.membershipRepository = membershipRepository;
         this.authorizationService = authorizationService;
         this.taskTemplateService = taskTemplateService;
+        this.activityLogService = activityLogService;
     }
 
     @Transactional(readOnly = true)
@@ -106,6 +112,20 @@ public class BoardService {
 
         createDefaultColumns(board.getId());
         taskTemplateService.linkBoardToDefaultTemplate(workspaceId, board.getId());
+
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.BOARD,
+                board.getId(),
+                null,
+                actorId,
+                ActivityAction.CREATE,
+                ActivityEntityType.BOARD,
+                board.getId(),
+                "Created board \"" + board.getName() + "\"",
+                null
+        );
+
         return toDto(board);
     }
 
@@ -113,8 +133,26 @@ public class BoardService {
     public BoardDto update(UUID actorId, UUID boardId, UpdateBoardRequest request) {
         authorizationService.requireBoardPermission(actorId, boardId, PermissionCodes.BOARD_MANAGE);
         Board board = requireActiveBoard(boardId);
+        String oldName = board.getName();
         board.setName(request.name().trim());
-        return toDto(boardRepository.save(board));
+        boardRepository.save(board);
+
+        if (!oldName.equals(board.getName())) {
+            activityLogService.log(
+                    board.getWorkspaceId(),
+                    ActivityScopeLevel.BOARD,
+                    board.getId(),
+                    null,
+                    actorId,
+                    ActivityAction.UPDATE,
+                    ActivityEntityType.BOARD,
+                    board.getId(),
+                    "Renamed board \"" + oldName + "\" to \"" + board.getName() + "\"",
+                    null
+            );
+        }
+
+        return toDto(board);
     }
 
     @Transactional(readOnly = true)
@@ -193,7 +231,7 @@ public class BoardService {
             TaskTemplate template = task.getTemplateId() != null ? templateMap.get(task.getTemplateId()) : null;
             taskDtos.add(new TaskDto(
                     task.getId(), task.getBoardId(), task.getColumnId(), task.getTitle(),
-                    task.getDescription(), task.getCreatedBy(), task.getAssigneeId(),
+                    task.getDescription(), task.getCreatedBy(), task.getCreatedByName(), task.getAssigneeId(),
                     task.getTemplateId(),
                     template != null ? template.getName() : null,
                     task.getPosition(), fieldDtos, task.getCreatedAt(), task.getUpdatedAt(),
@@ -245,7 +283,24 @@ public class BoardService {
         column.setBoardId(boardId);
         column.setName(request.name().trim());
         column.setPosition(position);
-        return toColumnDto(columnRepository.save(column));
+        BoardColumn saved = columnRepository.save(column);
+
+        Board board = boardRepository.findById(boardId)
+                .orElseThrow(() -> new NotFoundException("Board not found"));
+        activityLogService.log(
+                board.getWorkspaceId(),
+                ActivityScopeLevel.BOARD,
+                boardId,
+                null,
+                actorId,
+                ActivityAction.CREATE,
+                ActivityEntityType.COLUMN,
+                saved.getId(),
+                "Added column \"" + saved.getName() + "\" to board \"" + board.getName() + "\"",
+                null
+        );
+
+        return toColumnDto(saved);
     }
 
     @Transactional
@@ -255,6 +310,9 @@ public class BoardService {
 
         BoardColumn column = columnRepository.findByIdAndBoardId(columnId, boardId)
                 .orElseThrow(() -> new NotFoundException("Column not found"));
+        String columnName = column.getName();
+        Board board = boardRepository.findById(boardId)
+                .orElseThrow(() -> new NotFoundException("Board not found"));
 
         List<BoardColumn> columns = columnRepository.findByBoardIdOrderByPositionAsc(boardId);
         if (columns.size() <= 1) {
@@ -271,6 +329,19 @@ public class BoardService {
         }
 
         columnRepository.delete(column);
+
+        activityLogService.log(
+                board.getWorkspaceId(),
+                ActivityScopeLevel.BOARD,
+                boardId,
+                null,
+                actorId,
+                ActivityAction.DELETE,
+                ActivityEntityType.COLUMN,
+                columnId,
+                "Deleted column \"" + columnName + "\" from board \"" + board.getName() + "\"",
+                null
+        );
 
         List<BoardColumn> remaining = columnRepository.findByBoardIdOrderByPositionAsc(boardId);
         for (int i = 0; i < remaining.size(); i++) {
@@ -310,6 +381,21 @@ public class BoardService {
             columnRepository.save(column);
         }
 
+        Board board = boardRepository.findById(boardId)
+                .orElseThrow(() -> new NotFoundException("Board not found"));
+        activityLogService.log(
+                board.getWorkspaceId(),
+                ActivityScopeLevel.BOARD,
+                boardId,
+                null,
+                actorId,
+                ActivityAction.UPDATE,
+                ActivityEntityType.COLUMN,
+                null,
+                "Reordered columns on board \"" + board.getName() + "\"",
+                null
+        );
+
         return columnRepository.findByBoardIdOrderByPositionAsc(boardId).stream()
                 .map(this::toColumnDto)
                 .toList();
@@ -328,6 +414,19 @@ public class BoardService {
         authorizationService.requireBoardPermission(actorId, boardId, PermissionCodes.BOARD_MANAGE);
         Board board = requireActiveBoard(boardId);
         softDeleteBoard(actorId, board, Instant.now());
+
+        activityLogService.log(
+                board.getWorkspaceId(),
+                ActivityScopeLevel.BOARD,
+                board.getId(),
+                null,
+                actorId,
+                ActivityAction.DELETE,
+                ActivityEntityType.BOARD,
+                board.getId(),
+                "Deleted board \"" + board.getName() + "\"",
+                null
+        );
     }
 
     @Transactional
@@ -350,7 +449,22 @@ public class BoardService {
 
         board.setDeletedAt(null);
         board.setDeletedBy(null);
-        return toDto(boardRepository.save(board));
+        boardRepository.save(board);
+
+        activityLogService.log(
+                board.getWorkspaceId(),
+                ActivityScopeLevel.BOARD,
+                board.getId(),
+                null,
+                actorId,
+                ActivityAction.RESTORE,
+                ActivityEntityType.BOARD,
+                board.getId(),
+                "Restored board \"" + board.getName() + "\"",
+                null
+        );
+
+        return toDto(board);
     }
 
     @Transactional(readOnly = true)

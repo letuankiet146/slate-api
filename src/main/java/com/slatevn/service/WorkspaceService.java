@@ -1,5 +1,8 @@
 package com.slatevn.service;
 
+import com.slatevn.domain.ActivityAction;
+import com.slatevn.domain.ActivityEntityType;
+import com.slatevn.domain.ActivityScopeLevel;
 import com.slatevn.domain.Membership;
 import com.slatevn.domain.PermissionCodes;
 import com.slatevn.domain.Role;
@@ -9,8 +12,10 @@ import com.slatevn.domain.User;
 import com.slatevn.domain.Board;
 import com.slatevn.domain.Workspace;
 import com.slatevn.dto.AddMembershipRequest;
+import com.slatevn.dto.AssignableUserDto;
 import com.slatevn.dto.CreateWorkspaceRequest;
 import com.slatevn.dto.MembershipDto;
+import com.slatevn.dto.UpdateMembershipRequest;
 import com.slatevn.dto.UpdateWorkspaceRequest;
 import com.slatevn.dto.WorkspaceDetailDto;
 import com.slatevn.dto.WorkspaceDto;
@@ -40,6 +45,7 @@ public class WorkspaceService {
     private final BoardService boardService;
     private final AuthorizationService authorizationService;
     private final TaskTemplateService taskTemplateService;
+    private final ActivityLogService activityLogService;
 
     public WorkspaceService(
             WorkspaceRepository workspaceRepository,
@@ -49,7 +55,8 @@ public class WorkspaceService {
             BoardRepository boardRepository,
             BoardService boardService,
             AuthorizationService authorizationService,
-            TaskTemplateService taskTemplateService
+            TaskTemplateService taskTemplateService,
+            ActivityLogService activityLogService
     ) {
         this.workspaceRepository = workspaceRepository;
         this.membershipRepository = membershipRepository;
@@ -59,17 +66,23 @@ public class WorkspaceService {
         this.boardService = boardService;
         this.authorizationService = authorizationService;
         this.taskTemplateService = taskTemplateService;
+        this.activityLogService = activityLogService;
     }
 
     @Transactional(readOnly = true)
     public List<WorkspaceDto> list(UUID actorId) {
         List<UUID> visible = authorizationService.visibleWorkspaceIds(actorId);
         List<Workspace> all = workspaceRepository.findByDeletedAtIsNullOrderByNameAsc();
-        if (visible == null) {
-            return all.stream().map(this::toDto).toList();
-        }
         return all.stream()
                 .filter(w -> visible.contains(w.getId()))
+                .map(this::toDto)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<WorkspaceDto> listAllForAdmin(UUID actorId) {
+        authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
+        return workspaceRepository.findByDeletedAtIsNullOrderByNameAsc().stream()
                 .map(this::toDto)
                 .toList();
     }
@@ -93,8 +106,44 @@ public class WorkspaceService {
     public WorkspaceDto update(UUID actorId, UUID workspaceId, UpdateWorkspaceRequest request) {
         authorizationService.requireWorkspacePermission(actorId, workspaceId, PermissionCodes.WORKSPACE_MANAGE);
         Workspace workspace = requireActiveWorkspace(workspaceId);
+        String oldName = workspace.getName();
         workspace.setName(request.name().trim());
-        return toDto(workspaceRepository.save(workspace));
+        if (request.companyEmail() != null) {
+            String companyEmail = request.companyEmail().trim();
+            workspace.setCompanyEmail(companyEmail.isEmpty() ? null : companyEmail.toLowerCase());
+        }
+        workspaceRepository.save(workspace);
+
+        if (!oldName.equals(workspace.getName())) {
+            activityLogService.log(
+                    workspaceId,
+                    ActivityScopeLevel.WORKSPACE,
+                    null,
+                    null,
+                    actorId,
+                    ActivityAction.UPDATE,
+                    ActivityEntityType.WORKSPACE,
+                    workspaceId,
+                    "Renamed workspace \"" + oldName + "\" to \"" + workspace.getName() + "\"",
+                    null
+            );
+        }
+        if (request.companyEmail() != null) {
+            activityLogService.log(
+                    workspaceId,
+                    ActivityScopeLevel.WORKSPACE,
+                    null,
+                    null,
+                    actorId,
+                    ActivityAction.UPDATE,
+                    ActivityEntityType.WORKSPACE,
+                    workspaceId,
+                    "Updated company email for workspace \"" + workspace.getName() + "\"",
+                    null
+            );
+        }
+
+        return toDto(workspace);
     }
 
     @Transactional
@@ -106,6 +155,19 @@ public class WorkspaceService {
         workspace.setDeletedAt(now);
         workspace.setDeletedBy(actorId);
         workspaceRepository.save(workspace);
+
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.WORKSPACE,
+                null,
+                null,
+                actorId,
+                ActivityAction.DELETE,
+                ActivityEntityType.WORKSPACE,
+                workspaceId,
+                "Deleted workspace \"" + workspace.getName() + "\"",
+                null
+        );
     }
 
     @Transactional
@@ -128,6 +190,19 @@ public class WorkspaceService {
                     boardRepository.save(board);
                 });
 
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.WORKSPACE,
+                null,
+                null,
+                actorId,
+                ActivityAction.RESTORE,
+                ActivityEntityType.WORKSPACE,
+                workspaceId,
+                "Restored workspace \"" + workspace.getName() + "\"",
+                null
+        );
+
         return toDto(workspace);
     }
 
@@ -147,10 +222,7 @@ public class WorkspaceService {
 
     @Transactional
     public WorkspaceDto create(UUID actorId, CreateWorkspaceRequest request) {
-        if (!authorizationService.hasSystemPermission(actorId, PermissionCodes.WORKSPACE_MANAGE)
-                && !authorizationService.hasSystemPermission(actorId, PermissionCodes.USER_MANAGE)) {
-            throw new com.slatevn.web.ForbiddenException("Missing permission: WORKSPACE_MANAGE");
-        }
+        authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
         if (workspaceRepository.existsByKeyIgnoreCase(request.key())) {
             throw new BadRequestException("Workspace key already exists");
         }
@@ -159,39 +231,74 @@ public class WorkspaceService {
         workspace.setKey(request.key().toUpperCase());
         workspace.setCreatedBy(actorId);
         workspaceRepository.save(workspace);
-
-        Role adminRole = roleRepository.findByCode("WORKSPACE_ADMIN")
-                .orElseThrow(() -> new IllegalStateException("WORKSPACE_ADMIN missing"));
-        User actor = userRepository.findById(actorId).orElseThrow();
-        Membership membership = new Membership();
-        membership.setUser(actor);
-        membership.setRole(adminRole);
-        membership.setScopeType(ScopeType.WORKSPACE);
-        membership.setWorkspaceId(workspace.getId());
-        membershipRepository.save(membership);
         taskTemplateService.ensureDefaultTemplate(workspace.getId());
+
+        if (request.adminUserId() != null) {
+            User adminUser = userRepository.findById(request.adminUserId())
+                    .orElseThrow(() -> new NotFoundException("Workspace admin user not found"));
+            if (authorizationService.isSystemAdmin(adminUser.getId())) {
+                throw new BadRequestException("System administrators cannot be assigned as workspace admin");
+            }
+            Role adminRole = roleRepository.findByCode(RoleCodes.WORKSPACE_ADMIN)
+                    .orElseThrow(() -> new IllegalStateException("WORKSPACE_ADMIN missing"));
+            Membership membership = new Membership();
+            membership.setUser(adminUser);
+            membership.setRole(adminRole);
+            membership.setScopeType(ScopeType.WORKSPACE);
+            membership.setWorkspaceId(workspace.getId());
+            membershipRepository.save(membership);
+        }
 
         return toDto(workspace);
     }
 
     @Transactional(readOnly = true)
     public List<MembershipDto> listMemberships(UUID actorId, UUID workspaceId) {
-        authorizationService.requireWorkspacePermission(actorId, workspaceId, PermissionCodes.WORKSPACE_MANAGE);
+        authorizationService.requireWorkspaceAdmin(actorId, workspaceId);
         return membershipRepository.findByWorkspaceId(workspaceId).stream()
                 .map(this::toMembershipDto)
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public AssignableUserDto lookupMemberByEmail(UUID actorId, UUID workspaceId, String email) {
+        requireCanManageWorkspaceMembers(actorId, workspaceId);
+        User user = userRepository.findByEmailIgnoreCase(email.trim())
+                .orElseThrow(() -> new NotFoundException("User not found"));
+        if (!user.isEnabled()) {
+            throw new BadRequestException("User is disabled");
+        }
+        if (authorizationService.isSystemAdmin(user.getId())) {
+            throw new NotFoundException("User not found");
+        }
+        if (isAlreadyMember(user.getId(), workspaceId)) {
+            throw new BadRequestException("User is already a member of this workspace");
+        }
+        return new AssignableUserDto(user.getId(), user.getEmail(), user.getDisplayName());
+    }
+
     @Transactional
     public MembershipDto addMembership(UUID actorId, UUID workspaceId, AddMembershipRequest request) {
-        authorizationService.requireWorkspacePermission(actorId, workspaceId, PermissionCodes.WORKSPACE_MANAGE);
+        requireCanManageWorkspaceMembers(actorId, workspaceId);
         if (!workspaceRepository.existsById(workspaceId)) {
             throw new NotFoundException("Workspace not found");
         }
-        User user = userRepository.findById(request.userId())
+        User user = userRepository.findByEmailIgnoreCase(request.email().trim())
                 .orElseThrow(() -> new NotFoundException("User not found"));
+        if (!user.isEnabled()) {
+            throw new BadRequestException("User is disabled");
+        }
+        if (authorizationService.isSystemAdmin(user.getId())) {
+            throw new BadRequestException("System administrators cannot be added as workspace members");
+        }
+        if (isAlreadyMember(user.getId(), workspaceId)) {
+            throw new BadRequestException("User is already a member of this workspace");
+        }
         Role role = roleRepository.findByCode(request.roleCode())
                 .orElseThrow(() -> new BadRequestException("Unknown role: " + request.roleCode()));
+        if (RoleCodes.SYSTEM_ADMIN.equals(role.getCode())) {
+            throw new BadRequestException("SYSTEM_ADMIN role cannot be assigned at workspace scope");
+        }
 
         String scope = request.scopeType() == null ? "WORKSPACE" : request.scopeType().toUpperCase();
         if (RoleCodes.BOARD_VIEWER.equals(role.getCode())) {
@@ -221,12 +328,83 @@ public class WorkspaceService {
             membership.setWorkspaceId(workspaceId);
         }
 
-        return toMembershipDto(membershipRepository.save(membership));
+        MembershipDto saved = toMembershipDto(membershipRepository.save(membership));
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.WORKSPACE,
+                null,
+                null,
+                actorId,
+                ActivityAction.CREATE,
+                ActivityEntityType.MEMBERSHIP,
+                saved.id(),
+                "Added member " + saved.userDisplayName() + " (" + saved.roleCode() + ")",
+                null
+        );
+        return saved;
+    }
+
+    @Transactional
+    public MembershipDto updateMembership(
+            UUID actorId,
+            UUID workspaceId,
+            UUID membershipId,
+            UpdateMembershipRequest request
+    ) {
+        requireCanManageWorkspaceMembers(actorId, workspaceId);
+        Membership membership = membershipRepository.findById(membershipId)
+                .orElseThrow(() -> new NotFoundException("Membership not found"));
+        if (!workspaceId.equals(membership.getWorkspaceId())) {
+            throw new BadRequestException("Membership does not belong to workspace");
+        }
+        if (authorizationService.isSystemAdmin(membership.getUser().getId())) {
+            throw new BadRequestException("Cannot change role for a system administrator");
+        }
+        Role role = roleRepository.findByCode(request.roleCode())
+                .orElseThrow(() -> new BadRequestException("Unknown role: " + request.roleCode()));
+        if (RoleCodes.SYSTEM_ADMIN.equals(role.getCode())) {
+            throw new BadRequestException("SYSTEM_ADMIN role cannot be assigned at workspace scope");
+        }
+
+        String scope = request.scopeType() == null ? "WORKSPACE" : request.scopeType().toUpperCase();
+        if (RoleCodes.BOARD_VIEWER.equals(role.getCode())) {
+            if (!"BOARD".equals(scope) || request.boardId() == null) {
+                throw new BadRequestException("BOARD_VIEWER must be assigned to a specific board");
+            }
+        }
+
+        membership.setRole(role);
+        if ("BOARD".equals(scope)) {
+            var board = boardRepository.findById(request.boardId())
+                    .orElseThrow(() -> new NotFoundException("Board not found"));
+            if (!board.getWorkspaceId().equals(workspaceId)) {
+                throw new BadRequestException("Board does not belong to workspace");
+            }
+            membership.setScopeType(ScopeType.BOARD);
+            membership.setBoardId(board.getId());
+        } else {
+            membership.setScopeType(ScopeType.WORKSPACE);
+            membership.setBoardId(null);
+        }
+        MembershipDto saved = toMembershipDto(membershipRepository.save(membership));
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.WORKSPACE,
+                null,
+                null,
+                actorId,
+                ActivityAction.UPDATE,
+                ActivityEntityType.MEMBERSHIP,
+                saved.id(),
+                "Updated member " + saved.userDisplayName() + " to role " + saved.roleCode(),
+                null
+        );
+        return saved;
     }
 
     @Transactional
     public void removeMembership(UUID actorId, UUID workspaceId, UUID membershipId) {
-        authorizationService.requireWorkspacePermission(actorId, workspaceId, PermissionCodes.WORKSPACE_MANAGE);
+        requireCanManageWorkspaceMembers(actorId, workspaceId);
         if (!workspaceRepository.existsById(workspaceId)) {
             throw new NotFoundException("Workspace not found");
         }
@@ -235,11 +413,36 @@ public class WorkspaceService {
         if (!workspaceId.equals(membership.getWorkspaceId())) {
             throw new BadRequestException("Membership does not belong to workspace");
         }
-        if (authorizationService.isSystemAdmin(membership.getUser().getId())
-                && !authorizationService.isSystemAdmin(actorId)) {
-            throw new com.slatevn.web.ForbiddenException("Only system administrators can remove system administrators");
+        if (authorizationService.isSystemAdmin(membership.getUser().getId())) {
+            throw new com.slatevn.web.ForbiddenException("Cannot remove system administrator membership");
         }
+        String memberName = membership.getUser().getDisplayName();
         membershipRepository.delete(membership);
+
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.WORKSPACE,
+                null,
+                null,
+                actorId,
+                ActivityAction.DELETE,
+                ActivityEntityType.MEMBERSHIP,
+                membershipId,
+                "Removed member " + memberName,
+                null
+        );
+    }
+
+    private void requireCanManageWorkspaceMembers(UUID actorId, UUID workspaceId) {
+        if (authorizationService.isSystemAdmin(actorId)) {
+            throw new com.slatevn.web.ForbiddenException("System administrators cannot manage workspace members");
+        }
+        authorizationService.requireWorkspaceAdmin(actorId, workspaceId);
+    }
+
+    private boolean isAlreadyMember(UUID userId, UUID workspaceId) {
+        return membershipRepository.findByWorkspaceId(workspaceId).stream()
+                .anyMatch(m -> userId.equals(m.getUser().getId()));
     }
 
     private Workspace requireActiveWorkspace(UUID workspaceId) {
@@ -254,13 +457,8 @@ public class WorkspaceService {
     private void requireCanViewWorkspace(UUID actorId, UUID workspaceId) {
         requireActiveWorkspace(workspaceId);
         List<UUID> visible = authorizationService.visibleWorkspaceIds(actorId);
-        if (visible != null && !visible.contains(workspaceId)) {
-            // also allow if they have any board permission via TASK_VIEW
-            if (!authorizationService.hasWorkspacePermission(actorId, workspaceId, PermissionCodes.TASK_VIEW)
-                    && !authorizationService.hasWorkspacePermission(actorId, workspaceId, PermissionCodes.WORKSPACE_MANAGE)
-                    && !authorizationService.hasWorkspacePermission(actorId, workspaceId, PermissionCodes.BOARD_MANAGE)) {
-                throw new com.slatevn.web.ForbiddenException("No access to workspace");
-            }
+        if (!visible.contains(workspaceId)) {
+            throw new com.slatevn.web.ForbiddenException("No access to workspace");
         }
     }
 
@@ -283,7 +481,8 @@ public class WorkspaceService {
                 w.getCreatedBy(),
                 w.getCreatedAt(),
                 List.copyOf(permissions),
-                workspaceAdmin
+                workspaceAdmin,
+                w.getCompanyEmail()
         );
     }
 

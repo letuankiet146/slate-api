@@ -1,5 +1,8 @@
 package com.slatevn.service;
 
+import com.slatevn.domain.ActivityAction;
+import com.slatevn.domain.ActivityEntityType;
+import com.slatevn.domain.ActivityScopeLevel;
 import com.slatevn.domain.Board;
 import com.slatevn.domain.FieldDefinition;
 import com.slatevn.domain.FieldVisibility;
@@ -40,6 +43,7 @@ public class TaskTemplateService {
     private final TaskRepository taskRepository;
     private final WorkspaceRepository workspaceRepository;
     private final AuthorizationService authorizationService;
+    private final ActivityLogService activityLogService;
 
     public TaskTemplateService(
             TaskTemplateRepository templateRepository,
@@ -47,7 +51,8 @@ public class TaskTemplateService {
             BoardRepository boardRepository,
             TaskRepository taskRepository,
             WorkspaceRepository workspaceRepository,
-            AuthorizationService authorizationService
+            AuthorizationService authorizationService,
+            ActivityLogService activityLogService
     ) {
         this.templateRepository = templateRepository;
         this.fieldDefinitionRepository = fieldDefinitionRepository;
@@ -55,6 +60,7 @@ public class TaskTemplateService {
         this.taskRepository = taskRepository;
         this.workspaceRepository = workspaceRepository;
         this.authorizationService = authorizationService;
+        this.activityLogService = activityLogService;
     }
 
     @Transactional(readOnly = true)
@@ -103,6 +109,20 @@ public class TaskTemplateService {
         template.setVisibleBoardIds(validateVisibleBoards(workspaceId, request.visibleBoardIds()));
         templateRepository.save(template);
         replaceFields(template.getId(), request.fields());
+
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.WORKSPACE,
+                null,
+                null,
+                actorId,
+                ActivityAction.CREATE,
+                ActivityEntityType.TEMPLATE,
+                template.getId(),
+                "Created task template \"" + template.getName() + "\"",
+                null
+        );
+
         return toDto(template);
     }
 
@@ -124,6 +144,20 @@ public class TaskTemplateService {
         template.setVisibleBoardIds(validateVisibleBoards(workspaceId, request.visibleBoardIds()));
         templateRepository.save(template);
         replaceFields(template.getId(), request.fields());
+
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.WORKSPACE,
+                null,
+                null,
+                actorId,
+                ActivityAction.UPDATE,
+                ActivityEntityType.TEMPLATE,
+                template.getId(),
+                "Updated task template \"" + template.getName() + "\"",
+                null
+        );
+
         return toDto(template);
     }
 
@@ -142,8 +176,22 @@ public class TaskTemplateService {
             throw new BadRequestException("Cannot delete template that is used by tasks");
         }
 
+        String templateName = template.getName();
         fieldDefinitionRepository.deleteByTemplateId(templateId);
         templateRepository.delete(template);
+
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.WORKSPACE,
+                null,
+                null,
+                actorId,
+                ActivityAction.DELETE,
+                ActivityEntityType.TEMPLATE,
+                templateId,
+                "Deleted task template \"" + templateName + "\"",
+                null
+        );
     }
 
     @Transactional

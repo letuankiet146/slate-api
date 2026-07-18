@@ -1,5 +1,8 @@
 package com.slatevn.service;
 
+import com.slatevn.domain.ActivityAction;
+import com.slatevn.domain.ActivityEntityType;
+import com.slatevn.domain.ActivityScopeLevel;
 import com.slatevn.domain.Board;
 import com.slatevn.domain.BoardColumn;
 import com.slatevn.domain.FieldDefinition;
@@ -12,12 +15,14 @@ import com.slatevn.dto.MoveTaskRequest;
 import com.slatevn.dto.TaskDto;
 import com.slatevn.dto.TaskFieldValueDto;
 import com.slatevn.dto.UpdateTaskRequest;
+import com.slatevn.domain.User;
 import com.slatevn.repository.BoardColumnRepository;
 import com.slatevn.repository.BoardRepository;
 import com.slatevn.repository.FieldDefinitionRepository;
 import com.slatevn.repository.TaskFieldValueRepository;
 import com.slatevn.repository.TaskRepository;
 import com.slatevn.repository.TaskTemplateRepository;
+import com.slatevn.repository.UserRepository;
 import com.slatevn.repository.WorkspaceRepository;
 import com.slatevn.web.BadRequestException;
 import com.slatevn.web.ForbiddenException;
@@ -30,6 +35,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -43,7 +49,9 @@ public class TaskService {
     private final FieldDefinitionRepository fieldDefinitionRepository;
     private final TaskFieldValueRepository taskFieldValueRepository;
     private final TaskTemplateRepository templateRepository;
+    private final UserRepository userRepository;
     private final AuthorizationService authorizationService;
+    private final ActivityLogService activityLogService;
 
     public TaskService(
             TaskRepository taskRepository,
@@ -53,7 +61,9 @@ public class TaskService {
             FieldDefinitionRepository fieldDefinitionRepository,
             TaskFieldValueRepository taskFieldValueRepository,
             TaskTemplateRepository templateRepository,
-            AuthorizationService authorizationService
+            UserRepository userRepository,
+            AuthorizationService authorizationService,
+            ActivityLogService activityLogService
     ) {
         this.taskRepository = taskRepository;
         this.boardRepository = boardRepository;
@@ -62,7 +72,9 @@ public class TaskService {
         this.fieldDefinitionRepository = fieldDefinitionRepository;
         this.taskFieldValueRepository = taskFieldValueRepository;
         this.templateRepository = templateRepository;
+        this.userRepository = userRepository;
         this.authorizationService = authorizationService;
+        this.activityLogService = activityLogService;
     }
 
     @Transactional
@@ -87,12 +99,16 @@ public class TaskService {
                     .orElseThrow(() -> new BadRequestException("Invalid column for board"));
         }
 
+        User creator = userRepository.findById(actorId)
+                .orElseThrow(() -> new IllegalStateException("User not found"));
+
         Task task = new Task();
         task.setBoardId(boardId);
         task.setColumnId(columnId);
         task.setTitle(request.title());
         task.setDescription(request.description());
         task.setCreatedBy(actorId);
+        task.setCreatedByName(creator.getDisplayName());
         task.setAssigneeId(request.assigneeId());
         task.setTemplateId(template.getId());
         task.setPosition(taskRepository.findByColumnIdAndDeletedAtIsNullOrderByPositionAsc(columnId).size());
@@ -102,6 +118,20 @@ public class TaskService {
             applyFieldValues(actorId, boardId, task.getId(), task.getTemplateId(), request.fieldValues(), true);
         }
 
+        UUID workspaceId = resolveWorkspaceId(boardId);
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.TASK,
+                boardId,
+                task.getId(),
+                actorId,
+                ActivityAction.CREATE,
+                ActivityEntityType.TASK,
+                task.getId(),
+                "Created task \"" + task.getTitle() + "\"",
+                null
+        );
+
         return toDto(actorId, task);
     }
 
@@ -109,6 +139,12 @@ public class TaskService {
     public TaskDto update(UUID actorId, UUID taskId, UpdateTaskRequest request) {
         Task task = requireActiveTask(taskId);
         authorizationService.requireBoardPermission(actorId, task.getBoardId(), PermissionCodes.TASK_UPDATE);
+
+        String oldTitle = task.getTitle();
+        String oldDescription = task.getDescription();
+        UUID oldAssigneeId = task.getAssigneeId();
+        Map<UUID, String> oldFieldValues = taskFieldValueRepository.findByTaskId(task.getId()).stream()
+                .collect(Collectors.toMap(TaskFieldValue::getFieldDefinitionId, TaskFieldValue::getValue, (a, b) -> a));
 
         if (request.title() != null && !request.title().isBlank()) {
             task.setTitle(request.title());
@@ -119,8 +155,43 @@ public class TaskService {
         task.setAssigneeId(request.assigneeId());
         taskRepository.save(task);
 
+        List<String> changes = new ArrayList<>();
+        if (request.title() != null && !request.title().isBlank() && !request.title().equals(oldTitle)) {
+            changes.add("title: \"" + oldTitle + "\" → \"" + task.getTitle() + "\"");
+        }
+        if (request.description() != null && !Objects.equals(request.description(), oldDescription)) {
+            changes.add("description updated");
+        }
+        if (!Objects.equals(request.assigneeId(), oldAssigneeId)) {
+            changes.add("assignee changed");
+        }
+
         if (request.fieldValues() != null && !request.fieldValues().isEmpty()) {
+            for (Map.Entry<UUID, String> entry : request.fieldValues().entrySet()) {
+                String oldVal = oldFieldValues.get(entry.getKey());
+                if (!Objects.equals(oldVal, entry.getValue())) {
+                    fieldDefinitionRepository.findById(entry.getKey()).ifPresent(def ->
+                            changes.add("field \"" + def.getName() + "\" updated")
+                    );
+                }
+            }
             applyFieldValues(actorId, task.getBoardId(), task.getId(), task.getTemplateId(), request.fieldValues(), false);
+        }
+
+        if (!changes.isEmpty()) {
+            UUID workspaceId = resolveWorkspaceId(task.getBoardId());
+            activityLogService.log(
+                    workspaceId,
+                    ActivityScopeLevel.TASK,
+                    task.getBoardId(),
+                    task.getId(),
+                    actorId,
+                    ActivityAction.UPDATE,
+                    ActivityEntityType.TASK,
+                    task.getId(),
+                    "Updated task \"" + task.getTitle() + "\"",
+                    String.join("; ", changes)
+            );
         }
 
         return toDto(actorId, task);
@@ -139,6 +210,9 @@ public class TaskService {
             assertRequiredFieldsFilled(task, request.columnId());
         }
 
+        String sourceColumnName = columnName(sourceColumnId);
+        String targetColumnName = columnName(request.columnId());
+
         int targetPosition = request.position() != null
                 ? request.position()
                 : taskRepository.findByColumnIdAndDeletedAtIsNullOrderByPositionAsc(request.columnId()).stream()
@@ -147,6 +221,23 @@ public class TaskService {
                 .size();
 
         reorderTask(task, request.columnId(), targetPosition);
+
+        if (!request.columnId().equals(sourceColumnId)) {
+            UUID workspaceId = resolveWorkspaceId(task.getBoardId());
+            activityLogService.log(
+                    workspaceId,
+                    ActivityScopeLevel.TASK,
+                    task.getBoardId(),
+                    task.getId(),
+                    actorId,
+                    ActivityAction.MOVE,
+                    ActivityEntityType.TASK,
+                    task.getId(),
+                    "Moved task \"" + task.getTitle() + "\" from \"" + sourceColumnName + "\" to \"" + targetColumnName + "\"",
+                    null
+            );
+        }
+
         return toDto(actorId, task);
     }
 
@@ -239,6 +330,20 @@ public class TaskService {
         task.setPosition(taskRepository.findByColumnIdAndDeletedAtIsNullOrderByPositionAsc(todoColumn.getId()).size());
         taskRepository.save(task);
 
+        UUID workspaceId = resolveWorkspaceId(targetBoardId);
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.TASK,
+                targetBoardId,
+                task.getId(),
+                actorId,
+                ActivityAction.RESTORE,
+                ActivityEntityType.TASK,
+                task.getId(),
+                "Restored task \"" + task.getTitle() + "\"",
+                null
+        );
+
         return toDto(actorId, task);
     }
 
@@ -264,6 +369,20 @@ public class TaskService {
         task.setDeletedAt(Instant.now());
         task.setDeletedBy(actorId);
         taskRepository.save(task);
+
+        UUID workspaceId = resolveWorkspaceId(task.getBoardId());
+        activityLogService.log(
+                workspaceId,
+                ActivityScopeLevel.TASK,
+                task.getBoardId(),
+                task.getId(),
+                actorId,
+                ActivityAction.DELETE,
+                ActivityEntityType.TASK,
+                task.getId(),
+                "Deleted task \"" + task.getTitle() + "\"",
+                null
+        );
 
         if (columnId != null) {
             List<Task> remaining = taskRepository.findByColumnIdAndDeletedAtIsNullOrderByPositionAsc(columnId);
@@ -415,6 +534,7 @@ public class TaskService {
                 task.getTitle(),
                 task.getDescription(),
                 task.getCreatedBy(),
+                task.getCreatedByName(),
                 task.getAssigneeId(),
                 task.getTemplateId(),
                 templateName,
@@ -424,6 +544,21 @@ public class TaskService {
                 task.getUpdatedAt(),
                 task.getDeletedAt()
         );
+    }
+
+    private UUID resolveWorkspaceId(UUID boardId) {
+        return boardRepository.findById(boardId)
+                .map(Board::getWorkspaceId)
+                .orElseThrow(() -> new NotFoundException("Board not found"));
+    }
+
+    private String columnName(UUID columnId) {
+        if (columnId == null) {
+            return "—";
+        }
+        return columnRepository.findById(columnId)
+                .map(BoardColumn::getName)
+                .orElse("—");
     }
 
     private void ensureBoard(UUID boardId) {

@@ -32,6 +32,9 @@ public class Task {
     @Column(name = "created_by", nullable = false)
     private UUID createdBy;
 
+    @Column(name = "created_by_name", nullable = false)
+    private String createdByName;
+
     @Column(name = "assignee_id")
     private UUID assigneeId;
 
@@ -114,6 +117,14 @@ public class Task {
 
     public void setCreatedBy(UUID createdBy) {
         this.createdBy = createdBy;
+    }
+
+    public String getCreatedByName() {
+        return createdByName;
+    }
+
+    public void setCreatedByName(String createdByName) {
+        this.createdByName = createdByName;
     }
 
     public UUID getAssigneeId() {

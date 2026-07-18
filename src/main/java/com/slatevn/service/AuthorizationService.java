@@ -22,6 +22,15 @@ import java.util.UUID;
 @Service
 public class AuthorizationService {
 
+    private static final Set<String> TENANT_PERMISSIONS = Set.of(
+            PermissionCodes.WORKSPACE_MANAGE,
+            PermissionCodes.BOARD_MANAGE,
+            PermissionCodes.TASK_CREATE,
+            PermissionCodes.TASK_UPDATE,
+            PermissionCodes.TASK_VIEW,
+            PermissionCodes.TASK_VIEW_PUBLIC
+    );
+
     private final MembershipRepository membershipRepository;
     private final BoardRepository boardRepository;
 
@@ -45,9 +54,6 @@ public class AuthorizationService {
 
     @Transactional(readOnly = true)
     public boolean hasWorkspacePermission(UUID userId, UUID workspaceId, String permissionCode) {
-        if (hasSystemPermission(userId, permissionCode)) {
-            return true;
-        }
         return membershipRepository.findByUserId(userId).stream()
                 .filter(m -> appliesToWorkspace(m, workspaceId))
                 .flatMap(m -> m.getRole().getPermissions().stream())
@@ -58,9 +64,6 @@ public class AuthorizationService {
     public boolean hasBoardPermission(UUID userId, UUID boardId, String permissionCode) {
         Board board = boardRepository.findById(boardId)
                 .orElseThrow(() -> new NotFoundException("Board not found"));
-        if (hasSystemPermission(userId, permissionCode)) {
-            return true;
-        }
         return membershipRepository.findByUserId(userId).stream()
                 .filter(m -> appliesToBoard(m, board.getWorkspaceId(), boardId))
                 .flatMap(m -> m.getRole().getPermissions().stream())
@@ -73,8 +76,7 @@ public class AuthorizationService {
                 .orElseThrow(() -> new NotFoundException("Board not found"));
         Set<String> codes = new HashSet<>();
         for (Membership m : membershipRepository.findByUserId(userId)) {
-            if (m.getScopeType() == ScopeType.SYSTEM
-                    || appliesToBoard(m, board.getWorkspaceId(), boardId)) {
+            if (appliesToBoard(m, board.getWorkspaceId(), boardId)) {
                 m.getRole().getPermissions().forEach(p -> codes.add(p.getCode()));
             }
         }
@@ -85,7 +87,7 @@ public class AuthorizationService {
     public Set<String> resolveWorkspacePermissions(UUID userId, UUID workspaceId) {
         Set<String> codes = new HashSet<>();
         for (Membership m : membershipRepository.findByUserId(userId)) {
-            if (m.getScopeType() == ScopeType.SYSTEM || appliesToWorkspace(m, workspaceId)) {
+            if (appliesToWorkspace(m, workspaceId)) {
                 m.getRole().getPermissions().forEach(p -> codes.add(p.getCode()));
             }
         }
@@ -166,10 +168,6 @@ public class AuthorizationService {
 
     @Transactional(readOnly = true)
     public List<UUID> visibleWorkspaceIds(UUID userId) {
-        if (hasSystemPermission(userId, PermissionCodes.WORKSPACE_MANAGE)
-                || hasSystemPermission(userId, PermissionCodes.USER_MANAGE)) {
-            return null; // null means all
-        }
         return membershipRepository.findByUserId(userId).stream()
                 .filter(m -> m.getWorkspaceId() != null || m.getBoardId() != null)
                 .map(m -> {
@@ -185,12 +183,14 @@ public class AuthorizationService {
                 .toList();
     }
 
+    @Transactional(readOnly = true)
+    public boolean isTenantPermission(String permissionCode) {
+        return TENANT_PERMISSIONS.contains(permissionCode);
+    }
+
     private boolean appliesToWorkspace(Membership m, UUID workspaceId) {
         if (RoleCodes.BOARD_VIEWER.equals(m.getRole().getCode())) {
             return false;
-        }
-        if (m.getScopeType() == ScopeType.SYSTEM) {
-            return true;
         }
         if (m.getScopeType() == ScopeType.WORKSPACE) {
             return workspaceId.equals(m.getWorkspaceId());
@@ -206,9 +206,6 @@ public class AuthorizationService {
     private boolean appliesToBoard(Membership m, UUID workspaceId, UUID boardId) {
         if (RoleCodes.BOARD_VIEWER.equals(m.getRole().getCode())) {
             return m.getScopeType() == ScopeType.BOARD && boardId.equals(m.getBoardId());
-        }
-        if (m.getScopeType() == ScopeType.SYSTEM) {
-            return true;
         }
         if (m.getScopeType() == ScopeType.WORKSPACE) {
             return workspaceId.equals(m.getWorkspaceId());

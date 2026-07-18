@@ -11,6 +11,7 @@ public record TaskDto(
         String title,
         String description,
         UUID createdBy,
+        String createdByName,
         UUID assigneeId,
         UUID templateId,
         String templateName,

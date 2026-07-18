@@ -19,4 +19,6 @@ public interface WorkspaceRepository extends JpaRepository<Workspace, UUID> {
     List<Workspace> findByCreatedBy(UUID createdBy);
 
     List<Workspace> findByDeletedBy(UUID deletedBy);
+
+    List<Workspace> findByDeletedAtIsNullAndCompanyEmailIsNotNull();
 }

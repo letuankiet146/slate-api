@@ -5,6 +5,7 @@ import com.slatevn.domain.RefreshToken;
 import com.slatevn.domain.ScopeType;
 import com.slatevn.domain.User;
 import com.slatevn.dto.AuthResponse;
+import com.slatevn.dto.ChangePasswordRequest;
 import com.slatevn.dto.LoginRequest;
 import com.slatevn.repository.MembershipRepository;
 import com.slatevn.repository.RefreshTokenRepository;
@@ -14,6 +15,7 @@ import com.slatevn.web.BadRequestException;
 import com.slatevn.web.NotFoundException;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +36,7 @@ public class AuthService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final JwtService jwtService;
     private final JwtProperties jwtProperties;
+    private final PasswordEncoder passwordEncoder;
 
     public AuthService(
             AuthenticationManager authenticationManager,
@@ -41,7 +44,8 @@ public class AuthService {
             MembershipRepository membershipRepository,
             RefreshTokenRepository refreshTokenRepository,
             JwtService jwtService,
-            JwtProperties jwtProperties
+            JwtProperties jwtProperties,
+            PasswordEncoder passwordEncoder
     ) {
         this.authenticationManager = authenticationManager;
         this.userRepository = userRepository;
@@ -49,6 +53,7 @@ public class AuthService {
         this.refreshTokenRepository = refreshTokenRepository;
         this.jwtService = jwtService;
         this.jwtProperties = jwtProperties;
+        this.passwordEncoder = passwordEncoder;
     }
 
     @Transactional
@@ -83,6 +88,18 @@ public class AuthService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new NotFoundException("User not found"));
         return toUserResponse(user);
+    }
+
+    @Transactional
+    public void changePassword(UUID userId, ChangePasswordRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+        if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
+            throw new BadRequestException("Current password is incorrect");
+        }
+        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        userRepository.save(user);
+        refreshTokenRepository.deleteByUserId(userId);
     }
 
     private AuthResponse issueTokens(User user) {

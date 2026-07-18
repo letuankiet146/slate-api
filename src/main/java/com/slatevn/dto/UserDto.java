@@ -11,6 +11,7 @@ public record UserDto(
         String locale,
         boolean enabled,
         List<String> systemRoles,
+        List<UserMembershipDto> memberships,
         Instant createdAt
 ) {
 }

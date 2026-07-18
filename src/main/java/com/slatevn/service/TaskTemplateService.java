@@ -5,6 +5,7 @@ import com.slatevn.domain.ActivityEntityType;
 import com.slatevn.domain.ActivityScopeLevel;
 import com.slatevn.domain.Board;
 import com.slatevn.domain.FieldDefinition;
+import com.slatevn.domain.FieldType;
 import com.slatevn.domain.FieldVisibility;
 import com.slatevn.domain.PermissionCodes;
 import com.slatevn.domain.TaskTemplate;
@@ -36,6 +37,7 @@ import java.util.stream.Collectors;
 public class TaskTemplateService {
 
     public static final String DEFAULT_TEMPLATE_NAME = "Mặc định";
+    public static final String DEFAULT_DEADLINE_FIELD_NAME = "Deadline";
 
     private final TaskTemplateRepository templateRepository;
     private final FieldDefinitionRepository fieldDefinitionRepository;
@@ -196,14 +198,34 @@ public class TaskTemplateService {
 
     @Transactional
     public TaskTemplate ensureDefaultTemplate(UUID workspaceId) {
-        return templateRepository.findByWorkspaceIdAndNameIgnoreCase(workspaceId, DEFAULT_TEMPLATE_NAME)
+        TaskTemplate template = templateRepository.findByWorkspaceIdAndNameIgnoreCase(workspaceId, DEFAULT_TEMPLATE_NAME)
                 .orElseGet(() -> {
-                    TaskTemplate template = new TaskTemplate();
-                    template.setWorkspaceId(workspaceId);
-                    template.setName(DEFAULT_TEMPLATE_NAME);
-                    template.setVisibleBoardIds(new HashSet<>());
-                    return templateRepository.save(template);
+                    TaskTemplate created = new TaskTemplate();
+                    created.setWorkspaceId(workspaceId);
+                    created.setName(DEFAULT_TEMPLATE_NAME);
+                    created.setVisibleBoardIds(new HashSet<>());
+                    return templateRepository.save(created);
                 });
+        ensureDefaultFields(template);
+        return template;
+    }
+
+    private void ensureDefaultFields(TaskTemplate template) {
+        List<FieldDefinition> fields = fieldDefinitionRepository.findByTemplateIdOrderByPositionAsc(template.getId());
+        boolean hasDeadline = fields.stream()
+                .anyMatch(f -> DEFAULT_DEADLINE_FIELD_NAME.equalsIgnoreCase(f.getName()));
+        if (hasDeadline) {
+            return;
+        }
+        FieldDefinition deadline = new FieldDefinition();
+        deadline.setTemplateId(template.getId());
+        deadline.setName(DEFAULT_DEADLINE_FIELD_NAME);
+        deadline.setFieldType(FieldType.DATE);
+        deadline.setRequired(false);
+        deadline.setEditable(true);
+        deadline.setVisibility(FieldVisibility.INTERNAL);
+        deadline.setPosition(fields.size());
+        fieldDefinitionRepository.save(deadline);
     }
 
     @Transactional

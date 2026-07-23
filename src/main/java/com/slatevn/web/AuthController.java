@@ -1,6 +1,7 @@
 package com.slatevn.web;
 
 import com.slatevn.dto.AuthResponse;
+import com.slatevn.dto.GoogleAuthRequest;
 import com.slatevn.dto.LoginRequest;
 import com.slatevn.dto.ChangePasswordRequest;
 import com.slatevn.dto.RefreshRequest;
@@ -8,6 +9,7 @@ import com.slatevn.dto.RegisterRequest;
 import com.slatevn.dto.RegisterResponse;
 import com.slatevn.security.SecurityUtils;
 import com.slatevn.service.AuthService;
+import com.slatevn.service.GoogleAuthService;
 import com.slatevn.service.RegistrationService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,16 +23,27 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final GoogleAuthService googleAuthService;
     private final RegistrationService registrationService;
 
-    public AuthController(AuthService authService, RegistrationService registrationService) {
+    public AuthController(
+            AuthService authService,
+            GoogleAuthService googleAuthService,
+            RegistrationService registrationService
+    ) {
         this.authService = authService;
+        this.googleAuthService = googleAuthService;
         this.registrationService = registrationService;
     }
 
     @PostMapping("/login")
     public AuthResponse login(@Valid @RequestBody LoginRequest request) {
         return authService.login(request);
+    }
+
+    @PostMapping("/google")
+    public AuthResponse google(@Valid @RequestBody GoogleAuthRequest request) {
+        return googleAuthService.authenticate(request.idToken());
     }
 
     @PostMapping("/register")

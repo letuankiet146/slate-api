@@ -1,5 +1,6 @@
 package com.slatevn.service;
 
+import com.slatevn.domain.AccountType;
 import com.slatevn.domain.ActivityAction;
 import com.slatevn.domain.ActivityEntityType;
 import com.slatevn.domain.ActivityScopeLevel;
@@ -13,6 +14,7 @@ import com.slatevn.domain.Board;
 import com.slatevn.domain.Workspace;
 import com.slatevn.dto.AddMembershipRequest;
 import com.slatevn.dto.AssignableUserDto;
+import com.slatevn.dto.CreateInternalUserRequest;
 import com.slatevn.dto.CreateWorkspaceRequest;
 import com.slatevn.dto.MembershipDto;
 import com.slatevn.dto.UpdateMembershipRequest;
@@ -25,7 +27,9 @@ import com.slatevn.repository.RoleRepository;
 import com.slatevn.repository.UserRepository;
 import com.slatevn.repository.WorkspaceRepository;
 import com.slatevn.web.BadRequestException;
+import com.slatevn.web.ForbiddenException;
 import com.slatevn.web.NotFoundException;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,6 +50,7 @@ public class WorkspaceService {
     private final AuthorizationService authorizationService;
     private final TaskTemplateService taskTemplateService;
     private final ActivityLogService activityLogService;
+    private final PasswordEncoder passwordEncoder;
 
     public WorkspaceService(
             WorkspaceRepository workspaceRepository,
@@ -56,7 +61,8 @@ public class WorkspaceService {
             BoardService boardService,
             AuthorizationService authorizationService,
             TaskTemplateService taskTemplateService,
-            ActivityLogService activityLogService
+            ActivityLogService activityLogService,
+            PasswordEncoder passwordEncoder
     ) {
         this.workspaceRepository = workspaceRepository;
         this.membershipRepository = membershipRepository;
@@ -67,6 +73,7 @@ public class WorkspaceService {
         this.authorizationService = authorizationService;
         this.taskTemplateService = taskTemplateService;
         this.activityLogService = activityLogService;
+        this.passwordEncoder = passwordEncoder;
     }
 
     @Transactional(readOnly = true)
@@ -75,14 +82,6 @@ public class WorkspaceService {
         List<Workspace> all = workspaceRepository.findByDeletedAtIsNullOrderByNameAsc();
         return all.stream()
                 .filter(w -> visible.contains(w.getId()))
-                .map(this::toDto)
-                .toList();
-    }
-
-    @Transactional(readOnly = true)
-    public List<WorkspaceDto> listAllForAdmin(UUID actorId) {
-        authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
-        return workspaceRepository.findByDeletedAtIsNullOrderByNameAsc().stream()
                 .map(this::toDto)
                 .toList();
     }
@@ -220,36 +219,76 @@ public class WorkspaceService {
         return authorizationService.hasAnyWorkspaceAdminRole(actorId);
     }
 
+    @Transactional(readOnly = true)
+    public boolean canCreateWorkspace(UUID actorId) {
+        return userRepository.findById(actorId)
+                .map(user -> user.getAccountType() == AccountType.OWNER)
+                .orElse(false);
+    }
+
     @Transactional
     public WorkspaceDto create(UUID actorId, CreateWorkspaceRequest request) {
-        authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
+        User actor = userRepository.findById(actorId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+        if (actor.getAccountType() != AccountType.OWNER) {
+            throw new ForbiddenException("Internal users cannot create workspaces");
+        }
         if (workspaceRepository.existsByKeyIgnoreCase(request.key())) {
             throw new BadRequestException("Workspace key already exists");
         }
+
         Workspace workspace = new Workspace();
-        workspace.setName(request.name());
+        workspace.setName(request.name().trim());
         workspace.setKey(request.key().toUpperCase());
         workspace.setCreatedBy(actorId);
+        workspace.setOwnerId(actorId);
         workspaceRepository.save(workspace);
         taskTemplateService.ensureDefaultTemplate(workspace.getId());
 
-        if (request.adminUserId() != null) {
-            User adminUser = userRepository.findById(request.adminUserId())
-                    .orElseThrow(() -> new NotFoundException("Workspace admin user not found"));
-            if (authorizationService.isSystemAdmin(adminUser.getId())) {
-                throw new BadRequestException("System administrators cannot be assigned as workspace admin");
-            }
-            Role adminRole = roleRepository.findByCode(RoleCodes.WORKSPACE_ADMIN)
-                    .orElseThrow(() -> new IllegalStateException("WORKSPACE_ADMIN missing"));
-            Membership membership = new Membership();
-            membership.setUser(adminUser);
-            membership.setRole(adminRole);
-            membership.setScopeType(ScopeType.WORKSPACE);
-            membership.setWorkspaceId(workspace.getId());
-            membershipRepository.save(membership);
-        }
+        Role adminRole = roleRepository.findByCode(RoleCodes.WORKSPACE_ADMIN)
+                .orElseThrow(() -> new IllegalStateException("WORKSPACE_ADMIN missing"));
+        Membership membership = new Membership();
+        membership.setUser(actor);
+        membership.setRole(adminRole);
+        membership.setScopeType(ScopeType.WORKSPACE);
+        membership.setWorkspaceId(workspace.getId());
+        membershipRepository.save(membership);
 
         return toDto(workspace);
+    }
+
+    @Transactional
+    public MembershipDto createInternalUser(UUID actorId, UUID workspaceId, CreateInternalUserRequest request) {
+        requireCanManageWorkspaceMembers(actorId, workspaceId);
+        requireActiveWorkspace(workspaceId);
+
+        if (userRepository.existsByEmailIgnoreCase(request.email())) {
+            throw new BadRequestException("Email already exists");
+        }
+        if (RoleCodes.WORKSPACE_ADMIN.equals(request.roleCode())) {
+            throw new BadRequestException("Internal users cannot be workspace administrators");
+        }
+        if (RoleCodes.SYSTEM_ADMIN.equals(request.roleCode())) {
+            throw new BadRequestException("Invalid role for internal user");
+        }
+
+        User user = new User();
+        user.setEmail(request.email().toLowerCase());
+        user.setPasswordHash(passwordEncoder.encode(request.password()));
+        user.setDisplayName(request.displayName().trim());
+        user.setLocale("vi");
+        user.setEnabled(true);
+        user.setAccountType(AccountType.INTERNAL);
+        user.setCreatedByUserId(actorId);
+        userRepository.save(user);
+
+        AddMembershipRequest membershipRequest = new AddMembershipRequest(
+                request.email(),
+                request.roleCode(),
+                request.scopeType(),
+                request.boardId()
+        );
+        return addMembership(actorId, workspaceId, membershipRequest);
     }
 
     @Transactional(readOnly = true)

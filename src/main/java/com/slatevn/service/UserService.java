@@ -176,6 +176,8 @@ public class UserService {
 
         user.setEnabled(true);
 
+        user.setAccountType(com.slatevn.domain.AccountType.OWNER);
+
         userRepository.save(user);
 
 

@@ -23,6 +23,9 @@ public class Workspace {
     @Column(nullable = false, unique = true, length = 32)
     private String key;
 
+    @Column(name = "owner_id", nullable = false)
+    private UUID ownerId;
+
     @Column(name = "created_by", nullable = false)
     private UUID createdBy;
 
@@ -78,6 +81,14 @@ public class Workspace {
 
     public void setKey(String key) {
         this.key = key;
+    }
+
+    public UUID getOwnerId() {
+        return ownerId;
+    }
+
+    public void setOwnerId(UUID ownerId) {
+        this.ownerId = ownerId;
     }
 
     public UUID getCreatedBy() {

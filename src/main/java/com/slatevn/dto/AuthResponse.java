@@ -17,6 +17,7 @@ public record AuthResponse(
             UUID id,
             String email,
             String displayName,
+            String avatarUrl,
             String locale,
             boolean enabled,
             String accountType,

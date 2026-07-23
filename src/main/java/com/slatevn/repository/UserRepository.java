@@ -14,9 +14,18 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByGoogleSub(String googleSub);
     boolean existsByEmailIgnoreCase(String email);
 
+    List<User> findByDeletedAtIsNullOrderByDisplayNameAsc();
+
+    List<User> findByDeletedAtIsNotNullOrderByDeletedAtDesc();
+
+    List<User> findByCreatedByUserId(UUID createdByUserId);
+
+    List<User> findByDeletedBy(UUID deletedBy);
+
     @Query("""
             SELECT u FROM User u
-            WHERE u.id NOT IN (
+            WHERE u.deletedAt IS NULL
+              AND u.id NOT IN (
                 SELECT m.user.id FROM Membership m
                 WHERE m.scopeType = com.slatevn.domain.ScopeType.SYSTEM
                   AND m.role.code = 'SYSTEM_ADMIN'

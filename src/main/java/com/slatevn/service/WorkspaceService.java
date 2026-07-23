@@ -26,6 +26,7 @@ import com.slatevn.repository.MembershipRepository;
 import com.slatevn.repository.RoleRepository;
 import com.slatevn.repository.UserRepository;
 import com.slatevn.repository.WorkspaceRepository;
+import com.slatevn.util.WorkspaceKeyGenerator;
 import com.slatevn.web.BadRequestException;
 import com.slatevn.web.ForbiddenException;
 import com.slatevn.web.NotFoundException;
@@ -222,7 +223,7 @@ public class WorkspaceService {
     @Transactional(readOnly = true)
     public boolean canCreateWorkspace(UUID actorId) {
         return userRepository.findById(actorId)
-                .map(user -> user.getAccountType() == AccountType.OWNER)
+                .map(user -> !user.isDeleted() && user.getAccountType() == AccountType.OWNER)
                 .orElse(false);
     }
 
@@ -230,16 +231,29 @@ public class WorkspaceService {
     public WorkspaceDto create(UUID actorId, CreateWorkspaceRequest request) {
         User actor = userRepository.findById(actorId)
                 .orElseThrow(() -> new NotFoundException("User not found"));
+        if (actor.isDeleted()) {
+            throw new ForbiddenException("Account has been deleted");
+        }
         if (actor.getAccountType() != AccountType.OWNER) {
             throw new ForbiddenException("Internal users cannot create workspaces");
         }
-        if (workspaceRepository.existsByKeyIgnoreCase(request.key())) {
-            throw new BadRequestException("Workspace key already exists");
+
+        String key = request.key() == null ? "" : request.key().trim();
+        if (key.isEmpty()) {
+            key = WorkspaceKeyGenerator.generateUniqueKey(request.name(), workspaceRepository);
+        } else {
+            if (!WorkspaceKeyGenerator.isValidKey(key)) {
+                throw new BadRequestException("Invalid workspace key");
+            }
+            key = key.toUpperCase();
+            if (workspaceRepository.existsByKeyIgnoreCase(key)) {
+                throw new BadRequestException("Workspace key already exists");
+            }
         }
 
         Workspace workspace = new Workspace();
         workspace.setName(request.name().trim());
-        workspace.setKey(request.key().toUpperCase());
+        workspace.setKey(key);
         workspace.setCreatedBy(actorId);
         workspace.setOwnerId(actorId);
         workspaceRepository.save(workspace);
@@ -304,7 +318,7 @@ public class WorkspaceService {
         requireCanManageWorkspaceMembers(actorId, workspaceId);
         User user = userRepository.findByEmailIgnoreCase(email.trim())
                 .orElseThrow(() -> new NotFoundException("User not found"));
-        if (!user.isEnabled()) {
+        if (!user.isEnabled() || user.isDeleted()) {
             throw new BadRequestException("User is disabled");
         }
         if (authorizationService.isSystemAdmin(user.getId())) {
@@ -313,7 +327,7 @@ public class WorkspaceService {
         if (isAlreadyMember(user.getId(), workspaceId)) {
             throw new BadRequestException("User is already a member of this workspace");
         }
-        return new AssignableUserDto(user.getId(), user.getEmail(), user.getDisplayName());
+        return new AssignableUserDto(user.getId(), user.getEmail(), user.getDisplayName(), user.getAvatarUrl());
     }
 
     @Transactional
@@ -324,7 +338,7 @@ public class WorkspaceService {
         }
         User user = userRepository.findByEmailIgnoreCase(request.email().trim())
                 .orElseThrow(() -> new NotFoundException("User not found"));
-        if (!user.isEnabled()) {
+        if (!user.isEnabled() || user.isDeleted()) {
             throw new BadRequestException("User is disabled");
         }
         if (authorizationService.isSystemAdmin(user.getId())) {
@@ -531,6 +545,7 @@ public class WorkspaceService {
                 m.getUser().getId(),
                 m.getUser().getEmail(),
                 m.getUser().getDisplayName(),
+                m.getUser().getAvatarUrl(),
                 m.getRole().getCode(),
                 m.getScopeType().name(),
                 m.getWorkspaceId(),

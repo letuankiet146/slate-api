@@ -14,4 +14,6 @@ public interface WorkspaceJoinRequestRepository extends JpaRepository<WorkspaceJ
 
     List<WorkspaceJoinRequest> findByWorkspaceIdAndStatusOrderByCreatedAtDesc(
             UUID workspaceId, JoinRequestStatus status);
+
+    List<WorkspaceJoinRequest> findByReviewedBy(UUID reviewedBy);
 }

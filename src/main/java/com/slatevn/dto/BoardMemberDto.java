@@ -5,6 +5,7 @@ import java.util.UUID;
 public record BoardMemberDto(
         UUID userId,
         String email,
-        String displayName
+        String displayName,
+        String avatarUrl
 ) {
 }

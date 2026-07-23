@@ -8,10 +8,12 @@ public record UserDto(
         UUID id,
         String email,
         String displayName,
+        String avatarUrl,
         String locale,
         boolean enabled,
         List<String> systemRoles,
         List<UserMembershipDto> memberships,
-        Instant createdAt
+        Instant createdAt,
+        Instant deletedAt
 ) {
 }

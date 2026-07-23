@@ -37,6 +37,8 @@ app:
     admin-display-name: ${ADMIN_DISPLAY_NAME:System Admin}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+  google:
+    client-id: ${GOOGLE_CLIENT_ID:}
 
 logging:
   level:

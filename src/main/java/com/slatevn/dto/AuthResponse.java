@@ -19,6 +19,7 @@ public record AuthResponse(
             String displayName,
             String locale,
             boolean enabled,
+            String accountType,
             List<String> systemPermissions
     ) {
     }

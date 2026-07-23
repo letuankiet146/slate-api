@@ -1,6 +1,7 @@
 package com.slatevn.service;
 
 import com.slatevn.config.JwtProperties;
+import com.slatevn.domain.AccountType;
 import com.slatevn.domain.RefreshToken;
 import com.slatevn.domain.ScopeType;
 import com.slatevn.domain.User;
@@ -58,10 +59,21 @@ public class AuthService {
 
     @Transactional
     public AuthResponse login(LoginRequest request) {
+        User user = userRepository.findByEmailIgnoreCase(request.email())
+                .orElseThrow(() -> new BadRequestException("Invalid email or password"));
+        if (user.getPasswordHash() == null || user.getPasswordHash().isBlank()) {
+            throw new BadRequestException("This account uses Google Sign-In");
+        }
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.email().toLowerCase(), request.password()));
-        User user = userRepository.findByEmailIgnoreCase(request.email())
-                .orElseThrow(() -> new NotFoundException("User not found"));
+        return issueTokens(user);
+    }
+
+    @Transactional
+    public AuthResponse issueTokensForUser(User user) {
+        if (!user.isEnabled()) {
+            throw new BadRequestException("Account is disabled");
+        }
         return issueTokens(user);
     }
 
@@ -94,6 +106,9 @@ public class AuthService {
     public void changePassword(UUID userId, ChangePasswordRequest request) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new NotFoundException("User not found"));
+        if (user.getPasswordHash() == null || user.getPasswordHash().isBlank()) {
+            throw new BadRequestException("This account uses Google Sign-In");
+        }
         if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
             throw new BadRequestException("Current password is incorrect");
         }
@@ -129,6 +144,7 @@ public class AuthService {
                 user.getDisplayName(),
                 user.getLocale(),
                 user.isEnabled(),
+                user.getAccountType().name(),
                 perms
         );
     }

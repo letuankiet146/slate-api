@@ -3,6 +3,7 @@ package com.slatevn.web;
 import com.slatevn.dto.AddMembershipRequest;
 import com.slatevn.dto.AssignableUserDto;
 import com.slatevn.dto.BoardDto;
+import com.slatevn.dto.CreateInternalUserRequest;
 import com.slatevn.dto.CreateWorkspaceRequest;
 import com.slatevn.dto.MembershipDto;
 import com.slatevn.dto.SaveTaskTemplateRequest;
@@ -56,8 +57,10 @@ public class WorkspaceController {
 
     @GetMapping("/capabilities/workspace-admin")
     public WorkspaceAdminCapabilityDto workspaceAdminCapability() {
+        UUID userId = SecurityUtils.currentUser().getId();
         return new WorkspaceAdminCapabilityDto(
-                workspaceService.hasAnyWorkspaceAdminRole(SecurityUtils.currentUser().getId())
+                workspaceService.hasAnyWorkspaceAdminRole(userId),
+                workspaceService.canCreateWorkspace(userId)
         );
     }
 
@@ -92,6 +95,14 @@ public class WorkspaceController {
     @PostMapping
     public WorkspaceDto create(@Valid @RequestBody CreateWorkspaceRequest request) {
         return workspaceService.create(SecurityUtils.currentUser().getId(), request);
+    }
+
+    @PostMapping("/{id}/internal-users")
+    public MembershipDto createInternalUser(
+            @PathVariable UUID id,
+            @Valid @RequestBody CreateInternalUserRequest request
+    ) {
+        return workspaceService.createInternalUser(SecurityUtils.currentUser().getId(), id, request);
     }
 
     @GetMapping("/{id}/memberships")

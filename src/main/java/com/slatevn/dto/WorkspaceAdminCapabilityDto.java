@@ -1,6 +1,7 @@
 package com.slatevn.dto;
 
 public record WorkspaceAdminCapabilityDto(
-        boolean workspaceAdmin
+        boolean workspaceAdmin,
+        boolean canCreateWorkspace
 ) {
 }

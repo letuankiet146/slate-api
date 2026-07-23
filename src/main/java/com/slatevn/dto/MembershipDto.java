@@ -7,6 +7,7 @@ public record MembershipDto(
         UUID userId,
         String userEmail,
         String userDisplayName,
+        String userAvatarUrl,
         String roleCode,
         String scopeType,
         UUID workspaceId,

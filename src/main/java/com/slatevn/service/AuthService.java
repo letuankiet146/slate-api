@@ -8,6 +8,7 @@ import com.slatevn.domain.User;
 import com.slatevn.dto.AuthResponse;
 import com.slatevn.dto.ChangePasswordRequest;
 import com.slatevn.dto.LoginRequest;
+import com.slatevn.dto.UpdateProfileRequest;
 import com.slatevn.repository.MembershipRepository;
 import com.slatevn.repository.RefreshTokenRepository;
 import com.slatevn.repository.UserRepository;
@@ -19,6 +20,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -38,6 +40,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final JwtProperties jwtProperties;
     private final PasswordEncoder passwordEncoder;
+    private final AvatarStorageService avatarStorageService;
 
     public AuthService(
             AuthenticationManager authenticationManager,
@@ -46,7 +49,8 @@ public class AuthService {
             RefreshTokenRepository refreshTokenRepository,
             JwtService jwtService,
             JwtProperties jwtProperties,
-            PasswordEncoder passwordEncoder
+            PasswordEncoder passwordEncoder,
+            AvatarStorageService avatarStorageService
     ) {
         this.authenticationManager = authenticationManager;
         this.userRepository = userRepository;
@@ -55,12 +59,16 @@ public class AuthService {
         this.jwtService = jwtService;
         this.jwtProperties = jwtProperties;
         this.passwordEncoder = passwordEncoder;
+        this.avatarStorageService = avatarStorageService;
     }
 
     @Transactional
     public AuthResponse login(LoginRequest request) {
         User user = userRepository.findByEmailIgnoreCase(request.email())
                 .orElseThrow(() -> new BadRequestException("Invalid email or password"));
+        if (user.isDeleted()) {
+            throw new BadRequestException("Account has been deleted");
+        }
         if (user.getPasswordHash() == null || user.getPasswordHash().isBlank()) {
             throw new BadRequestException("This account uses Google Sign-In");
         }
@@ -71,6 +79,9 @@ public class AuthService {
 
     @Transactional
     public AuthResponse issueTokensForUser(User user) {
+        if (user.isDeleted()) {
+            throw new BadRequestException("Account has been deleted");
+        }
         if (!user.isEnabled()) {
             throw new BadRequestException("Account is disabled");
         }
@@ -92,6 +103,9 @@ public class AuthService {
 
         User user = userRepository.findById(stored.getUserId())
                 .orElseThrow(() -> new NotFoundException("User not found"));
+        if (user.isDeleted()) {
+            throw new BadRequestException("Account has been deleted");
+        }
         return issueTokens(user);
     }
 
@@ -115,6 +129,43 @@ public class AuthService {
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
         refreshTokenRepository.deleteByUserId(userId);
+    }
+
+    @Transactional
+    public AuthResponse.UserResponse updateProfile(UUID userId, UpdateProfileRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+        if (user.isDeleted()) {
+            throw new BadRequestException("Account has been deleted");
+        }
+        if (request.displayName() != null) {
+            String name = request.displayName().trim();
+            if (name.isEmpty()) {
+                throw new BadRequestException("Display name is required");
+            }
+            user.setDisplayName(name);
+        }
+        if (request.avatarUrl() != null) {
+            String avatarUrl = request.avatarUrl().trim();
+            if (avatarUrl.isEmpty()) {
+                avatarStorageService.delete(userId);
+                user.setAvatarUrl(null);
+            } else {
+                user.setAvatarUrl(avatarUrl);
+            }
+        }
+        return toUserResponse(userRepository.save(user));
+    }
+
+    @Transactional
+    public AuthResponse.UserResponse uploadAvatar(UUID userId, MultipartFile file) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new NotFoundException("User not found"));
+        if (user.isDeleted()) {
+            throw new BadRequestException("Account has been deleted");
+        }
+        user.setAvatarUrl(avatarStorageService.store(userId, file));
+        return toUserResponse(userRepository.save(user));
     }
 
     private AuthResponse issueTokens(User user) {
@@ -142,6 +193,7 @@ public class AuthService {
                 user.getId(),
                 user.getEmail(),
                 user.getDisplayName(),
+                user.getAvatarUrl(),
                 user.getLocale(),
                 user.isEnabled(),
                 user.getAccountType().name(),

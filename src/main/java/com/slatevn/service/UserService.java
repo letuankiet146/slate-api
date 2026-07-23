@@ -36,6 +36,8 @@ import com.slatevn.repository.TaskRepository;
 
 import com.slatevn.repository.UserRepository;
 
+import com.slatevn.repository.WorkspaceJoinRequestRepository;
+
 import com.slatevn.repository.WorkspaceRepository;
 
 import com.slatevn.web.BadRequestException;
@@ -49,6 +51,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 
+
+import java.time.Instant;
 
 import java.util.ArrayList;
 
@@ -74,9 +78,13 @@ public class UserService {
 
     private final BoardRepository boardRepository;
 
+    private final BoardService boardService;
+
     private final TaskRepository taskRepository;
 
     private final RefreshTokenRepository refreshTokenRepository;
+
+    private final WorkspaceJoinRequestRepository joinRequestRepository;
 
     private final AuthorizationService authorizationService;
 
@@ -96,9 +104,13 @@ public class UserService {
 
             BoardRepository boardRepository,
 
+            BoardService boardService,
+
             TaskRepository taskRepository,
 
             RefreshTokenRepository refreshTokenRepository,
+
+            WorkspaceJoinRequestRepository joinRequestRepository,
 
             AuthorizationService authorizationService,
 
@@ -116,9 +128,13 @@ public class UserService {
 
         this.boardRepository = boardRepository;
 
+        this.boardService = boardService;
+
         this.taskRepository = taskRepository;
 
         this.refreshTokenRepository = refreshTokenRepository;
+
+        this.joinRequestRepository = joinRequestRepository;
 
         this.authorizationService = authorizationService;
 
@@ -134,7 +150,19 @@ public class UserService {
 
         authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
 
-        return userRepository.findAll().stream().map(this::toDto).toList();
+        return userRepository.findByDeletedAtIsNullOrderByDisplayNameAsc().stream().map(this::toDto).toList();
+
+    }
+
+
+
+    @Transactional(readOnly = true)
+
+    public List<UserDto> listDeleted(UUID actorId) {
+
+        authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
+
+        return userRepository.findByDeletedAtIsNotNullOrderByDeletedAtDesc().stream().map(this::toDto).toList();
 
     }
 
@@ -146,7 +174,7 @@ public class UserService {
 
         authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
 
-        return toDto(userRepository.findById(id).orElseThrow(() -> new NotFoundException("User not found")));
+        return toDto(requireUser(id));
 
     }
 
@@ -191,14 +219,20 @@ public class UserService {
         assignSystemRoles(user, roleCodes);
 
         return toDto(user);
+
     }
 
+
+
     @Transactional
+
     public UserDto update(UUID actorId, UUID id, UpdateUserRequest request) {
 
         authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
 
-        User user = userRepository.findById(id).orElseThrow(() -> new NotFoundException("User not found"));
+        User user = requireActiveUser(id);
+
+
 
         if (request.displayName() != null && !request.displayName().isBlank()) {
 
@@ -245,11 +279,17 @@ public class UserService {
                     .forEach(membershipRepository::delete);
 
             assignSystemRoles(user, request.systemRoleCodes());
+
         }
+
         return toDto(userRepository.save(user));
+
     }
 
+
+
     @Transactional
+
     public void delete(UUID actorId, UUID id) {
 
         authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
@@ -260,7 +300,283 @@ public class UserService {
 
         }
 
+        User user = requireActiveUser(id);
+
+        assertCanDeleteUser(id);
+
+        softDeleteUserCascade(actorId, user);
+
+    }
+
+
+
+    @Transactional
+
+    public UserDto restore(UUID actorId, UUID id) {
+
+        authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
+
         User user = userRepository.findById(id).orElseThrow(() -> new NotFoundException("User not found"));
+
+        if (!user.isDeleted()) {
+
+            throw new BadRequestException("User is not deleted");
+
+        }
+
+        user.setDeletedAt(null);
+
+        user.setDeletedBy(null);
+
+        user.setEnabled(true);
+
+        userRepository.save(user);
+
+
+
+        for (Workspace workspace : workspaceRepository.findByOwnerId(id)) {
+
+            if (workspace.isDeleted()) {
+
+                boardService.restoreBoardsInWorkspace(workspace.getId());
+
+                workspace.setDeletedAt(null);
+
+                workspace.setDeletedBy(null);
+
+                workspaceRepository.save(workspace);
+
+            }
+
+        }
+
+
+
+        for (User internal : userRepository.findByCreatedByUserId(id)) {
+
+            if (internal.isDeleted()) {
+
+                internal.setDeletedAt(null);
+
+                internal.setDeletedBy(null);
+
+                internal.setEnabled(true);
+
+                userRepository.save(internal);
+
+            }
+
+        }
+
+
+
+        return toDto(user);
+
+    }
+
+
+
+    @Transactional
+
+    public void permanentDelete(UUID actorId, UUID id) {
+
+        authorizationService.requireSystemPermission(actorId, PermissionCodes.USER_MANAGE);
+
+        if (actorId.equals(id)) {
+
+            throw new BadRequestException("Cannot permanently delete your own account");
+
+        }
+
+        User user = requireUser(id);
+
+        if (!user.isDeleted()) {
+
+            throw new BadRequestException("Only deleted users can be permanently removed");
+
+        }
+
+        assertCanDeleteUser(id);
+
+
+
+        for (User internal : userRepository.findByCreatedByUserId(id)) {
+
+            if (internal.isDeleted()) {
+
+                permanentDelete(actorId, internal.getId());
+
+            }
+
+        }
+
+
+
+        for (Workspace workspace : workspaceRepository.findByOwnerId(id)) {
+
+            workspaceRepository.delete(workspace);
+
+        }
+
+
+
+        clearRemainingUserReferences(actorId, id);
+
+        userRepository.delete(user);
+
+    }
+
+
+
+    private void softDeleteUserCascade(UUID actorId, User user) {
+
+        UUID id = user.getId();
+
+        Instant now = Instant.now();
+
+
+
+        for (User internal : userRepository.findByCreatedByUserId(id)) {
+
+            if (!internal.isDeleted()) {
+
+                softDeleteUserCascade(actorId, internal);
+
+            }
+
+        }
+
+
+
+        for (Workspace workspace : workspaceRepository.findByOwnerId(id)) {
+
+            if (!workspace.isDeleted()) {
+
+                boardService.softDeleteBoardsInWorkspace(actorId, workspace.getId(), now);
+
+                workspace.setDeletedAt(now);
+
+                workspace.setDeletedBy(actorId);
+
+                workspaceRepository.save(workspace);
+
+            }
+
+        }
+
+
+
+        taskRepository.findByAssigneeId(id).forEach(task -> task.setAssigneeId(null));
+
+        membershipRepository.deleteAll(membershipRepository.findByUserId(id));
+
+        refreshTokenRepository.deleteByUserId(id);
+
+
+
+        user.setDeletedAt(now);
+
+        user.setDeletedBy(actorId);
+
+        user.setEnabled(false);
+
+        userRepository.save(user);
+
+    }
+
+
+
+    private void clearRemainingUserReferences(UUID actorId, UUID id) {
+
+        workspaceRepository.findByCreatedBy(id).forEach(workspace -> {
+
+            workspace.setCreatedBy(actorId);
+
+            workspaceRepository.save(workspace);
+
+        });
+
+        boardRepository.findByCreatedBy(id).forEach(board -> {
+
+            board.setCreatedBy(actorId);
+
+            boardRepository.save(board);
+
+        });
+
+        taskRepository.findByCreatedBy(id).forEach(task -> {
+
+            task.setCreatedBy(actorId);
+
+            taskRepository.save(task);
+
+        });
+
+        taskRepository.findByAssigneeId(id).forEach(task -> {
+
+            task.setAssigneeId(null);
+
+            taskRepository.save(task);
+
+        });
+
+        workspaceRepository.findByDeletedBy(id).forEach(workspace -> {
+
+            workspace.setDeletedBy(null);
+
+            workspaceRepository.save(workspace);
+
+        });
+
+        boardRepository.findByDeletedBy(id).forEach(board -> {
+
+            board.setDeletedBy(null);
+
+            boardRepository.save(board);
+
+        });
+
+        taskRepository.findByDeletedBy(id).forEach(task -> {
+
+            task.setDeletedBy(null);
+
+            taskRepository.save(task);
+
+        });
+
+        userRepository.findByDeletedBy(id).forEach(other -> {
+
+            other.setDeletedBy(null);
+
+            userRepository.save(other);
+
+        });
+
+        userRepository.findByCreatedByUserId(id).forEach(other -> {
+
+            other.setCreatedByUserId(null);
+
+            userRepository.save(other);
+
+        });
+
+        joinRequestRepository.findByReviewedBy(id).forEach(request -> {
+
+            request.setReviewedBy(null);
+
+            joinRequestRepository.save(request);
+
+        });
+
+        membershipRepository.deleteAll(membershipRepository.findByUserId(id));
+
+        refreshTokenRepository.deleteByUserId(id);
+
+    }
+
+
+
+    private void assertCanDeleteUser(UUID id) {
 
         boolean isSystemAdmin = membershipRepository.findByUserIdAndScopeType(id, ScopeType.SYSTEM).stream()
 
@@ -274,29 +590,29 @@ public class UserService {
 
         }
 
-
-
-        workspaceRepository.findByCreatedBy(id).forEach(workspace -> workspace.setCreatedBy(actorId));
-
-        boardRepository.findByCreatedBy(id).forEach(board -> board.setCreatedBy(actorId));
-
-        taskRepository.findByCreatedBy(id).forEach(task -> task.setCreatedBy(actorId));
-
-        taskRepository.findByAssigneeId(id).forEach(task -> task.setAssigneeId(null));
-
-        workspaceRepository.findByDeletedBy(id).forEach(workspace -> workspace.setDeletedBy(null));
-
-        boardRepository.findByDeletedBy(id).forEach(board -> board.setDeletedBy(null));
-
-        taskRepository.findByDeletedBy(id).forEach(task -> task.setDeletedBy(null));
+    }
 
 
 
-        membershipRepository.deleteAll(membershipRepository.findByUserId(id));
+    private User requireUser(UUID id) {
 
-        refreshTokenRepository.deleteByUserId(id);
+        return userRepository.findById(id).orElseThrow(() -> new NotFoundException("User not found"));
 
-        userRepository.delete(user);
+    }
+
+
+
+    private User requireActiveUser(UUID id) {
+
+        User user = requireUser(id);
+
+        if (user.isDeleted()) {
+
+            throw new BadRequestException("User is deleted");
+
+        }
+
+        return user;
 
     }
 
@@ -378,6 +694,8 @@ public class UserService {
 
                 user.getDisplayName(),
 
+                user.getAvatarUrl(),
+
                 user.getLocale(),
 
                 user.isEnabled(),
@@ -386,12 +704,13 @@ public class UserService {
 
                 memberships,
 
-                user.getCreatedAt()
+                user.getCreatedAt(),
+
+                user.getDeletedAt()
 
         );
 
     }
 
 }
-
 

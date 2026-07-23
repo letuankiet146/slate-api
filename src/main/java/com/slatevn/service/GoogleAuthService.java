@@ -49,17 +49,26 @@ public class GoogleAuthService {
 
         Optional<User> byGoogleSub = userRepository.findByGoogleSub(googleSub);
         if (byGoogleSub.isPresent()) {
+            if (byGoogleSub.get().isDeleted()) {
+                throw new BadRequestException("Account has been deleted");
+            }
+            applyGooglePictureIfMissing(byGoogleSub.get(), payload);
+            userRepository.save(byGoogleSub.get());
             return authService.issueTokensForUser(byGoogleSub.get());
         }
 
         Optional<User> byEmail = userRepository.findByEmailIgnoreCase(email);
         if (byEmail.isPresent()) {
             User existing = byEmail.get();
+            if (existing.isDeleted()) {
+                throw new BadRequestException("Account has been deleted");
+            }
             if (existing.getAccountType() == AccountType.INTERNAL) {
                 throw new BadRequestException("Internal users must sign in with email and password");
             }
             if (existing.getGoogleSub() == null) {
                 existing.setGoogleSub(googleSub);
+                applyGooglePictureIfMissing(existing, payload);
                 userRepository.save(existing);
             } else if (!googleSub.equals(existing.getGoogleSub())) {
                 throw new BadRequestException("Google account does not match this email");
@@ -74,6 +83,7 @@ public class GoogleAuthService {
         user.setEnabled(true);
         user.setAccountType(AccountType.OWNER);
         user.setGoogleSub(googleSub);
+        user.setAvatarUrl(resolvePicture(payload));
         userRepository.save(user);
         return authService.issueTokensForUser(user);
     }
@@ -108,5 +118,22 @@ public class GoogleAuthService {
             return email.substring(0, email.indexOf('@'));
         }
         return "User";
+    }
+
+    private void applyGooglePictureIfMissing(User user, GoogleIdToken.Payload payload) {
+        if (user.getAvatarUrl() == null || user.getAvatarUrl().isBlank()) {
+            String picture = resolvePicture(payload);
+            if (picture != null) {
+                user.setAvatarUrl(picture);
+            }
+        }
+    }
+
+    private static String resolvePicture(GoogleIdToken.Payload payload) {
+        Object picture = payload.get("picture");
+        if (picture instanceof String value && !value.isBlank()) {
+            return value.trim();
+        }
+        return null;
     }
 }

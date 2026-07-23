@@ -46,7 +46,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             var userId = jwtService.getUserId(token);
             if (SecurityContextHolder.getContext().getAuthentication() == null) {
                 userRepository.findById(userId).ifPresent(user -> {
-                    if (!user.isEnabled()) {
+                    if (!user.isEnabled() || user.isDeleted()) {
                         return;
                     }
                     UserPrincipal principal = new UserPrincipal(user);

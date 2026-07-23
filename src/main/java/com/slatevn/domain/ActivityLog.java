@@ -31,7 +31,7 @@ public class ActivityLog {
     @Column(name = "task_id")
     private UUID taskId;
 
-    @Column(name = "actor_id", nullable = false)
+    @Column(name = "actor_id")
     private UUID actorId;
 
     @Column(name = "actor_name", nullable = false)

@@ -5,6 +5,7 @@ import java.util.UUID;
 public record AssignableUserDto(
         UUID id,
         String email,
-        String displayName
+        String displayName,
+        String avatarUrl
 ) {
 }

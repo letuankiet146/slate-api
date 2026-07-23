@@ -33,6 +33,11 @@ public class UserController {
         return userService.list(SecurityUtils.currentUser().getId());
     }
 
+    @GetMapping("/deleted")
+    public List<UserDto> listDeleted() {
+        return userService.listDeleted(SecurityUtils.currentUser().getId());
+    }
+
     @GetMapping("/{id}")
     public UserDto get(@PathVariable UUID id) {
         return userService.get(SecurityUtils.currentUser().getId(), id);
@@ -51,5 +56,15 @@ public class UserController {
     @DeleteMapping("/{id}")
     public void delete(@PathVariable UUID id) {
         userService.delete(SecurityUtils.currentUser().getId(), id);
+    }
+
+    @PostMapping("/{id}/restore")
+    public UserDto restore(@PathVariable UUID id) {
+        return userService.restore(SecurityUtils.currentUser().getId(), id);
+    }
+
+    @DeleteMapping("/{id}/permanent")
+    public void permanentDelete(@PathVariable UUID id) {
+        userService.permanentDelete(SecurityUtils.currentUser().getId(), id);
     }
 }

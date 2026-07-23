@@ -264,7 +264,8 @@ public class BoardService {
                         new BoardMemberDto(
                                 m.getUser().getId(),
                                 m.getUser().getEmail(),
-                                m.getUser().getDisplayName()
+                                m.getUser().getDisplayName(),
+                                m.getUser().getAvatarUrl()
                         )
                 );
             }
@@ -435,6 +436,17 @@ public class BoardService {
         for (Board board : boards) {
             softDeleteBoard(actorId, board, deletedAt);
         }
+    }
+
+    @Transactional
+    public void restoreBoardsInWorkspace(UUID workspaceId) {
+        boardRepository.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
+                .filter(Board::isDeleted)
+                .forEach(board -> {
+                    board.setDeletedAt(null);
+                    board.setDeletedBy(null);
+                    boardRepository.save(board);
+                });
     }
 
     @Transactional

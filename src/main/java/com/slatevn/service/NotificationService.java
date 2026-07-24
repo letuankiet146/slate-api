@@ -5,8 +5,10 @@ import com.slatevn.domain.NotificationTypes;
 import com.slatevn.domain.WorkspaceJoinRequest;
 import com.slatevn.dto.NotificationDto;
 import com.slatevn.dto.UnreadNotificationCountDto;
+import com.slatevn.dto.TaskNotificationContextDto;
 import com.slatevn.dto.WorkspaceJoinRequestDto;
 import com.slatevn.repository.NotificationRepository;
+import com.slatevn.repository.TaskRepository;
 import com.slatevn.repository.WorkspaceJoinRequestRepository;
 import com.slatevn.web.NotFoundException;
 import org.springframework.stereotype.Service;
@@ -22,15 +24,18 @@ public class NotificationService {
     private final NotificationRepository notificationRepository;
     private final WorkspaceJoinRequestRepository joinRequestRepository;
     private final WorkspaceJoinRequestService joinRequestService;
+    private final TaskRepository taskRepository;
 
     public NotificationService(
             NotificationRepository notificationRepository,
             WorkspaceJoinRequestRepository joinRequestRepository,
-            WorkspaceJoinRequestService joinRequestService
+            WorkspaceJoinRequestService joinRequestService,
+            TaskRepository taskRepository
     ) {
         this.notificationRepository = notificationRepository;
         this.joinRequestRepository = joinRequestRepository;
         this.joinRequestService = joinRequestService;
+        this.taskRepository = taskRepository;
     }
 
     @Transactional
@@ -77,9 +82,14 @@ public class NotificationService {
 
     private NotificationDto toDto(Notification notification) {
         WorkspaceJoinRequestDto joinRequest = null;
+        TaskNotificationContextDto task = null;
         if (NotificationTypes.WORKSPACE_JOIN_REQUEST.equals(notification.getType())) {
             joinRequest = joinRequestRepository.findById(notification.getReferenceId())
                     .map(joinRequestService::toDto)
+                    .orElse(null);
+        } else if (NotificationTypes.isTaskType(notification.getType())) {
+            task = taskRepository.findById(notification.getReferenceId())
+                    .map(t -> new TaskNotificationContextDto(t.getId(), t.getBoardId(), t.getTitle()))
                     .orElse(null);
         }
         return new NotificationDto(
@@ -90,7 +100,8 @@ public class NotificationService {
                 notification.getBody(),
                 notification.isRead(),
                 notification.getCreatedAt(),
-                joinRequest
+                joinRequest,
+                task
         );
     }
 }

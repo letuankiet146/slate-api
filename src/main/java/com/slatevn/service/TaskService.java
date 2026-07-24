@@ -52,6 +52,7 @@ public class TaskService {
     private final UserRepository userRepository;
     private final AuthorizationService authorizationService;
     private final ActivityLogService activityLogService;
+    private final TaskNotificationService taskNotificationService;
 
     public TaskService(
             TaskRepository taskRepository,
@@ -63,7 +64,8 @@ public class TaskService {
             TaskTemplateRepository templateRepository,
             UserRepository userRepository,
             AuthorizationService authorizationService,
-            ActivityLogService activityLogService
+            ActivityLogService activityLogService,
+            TaskNotificationService taskNotificationService
     ) {
         this.taskRepository = taskRepository;
         this.boardRepository = boardRepository;
@@ -75,6 +77,7 @@ public class TaskService {
         this.userRepository = userRepository;
         this.authorizationService = authorizationService;
         this.activityLogService = activityLogService;
+        this.taskNotificationService = taskNotificationService;
     }
 
     @Transactional
@@ -131,6 +134,8 @@ public class TaskService {
                 "Created task \"" + task.getTitle() + "\"",
                 null
         );
+
+        taskNotificationService.notifyAssigned(actorId, task, creator.getDisplayName());
 
         return toDto(actorId, task);
     }
@@ -192,6 +197,13 @@ public class TaskService {
                     "Updated task \"" + task.getTitle() + "\"",
                     String.join("; ", changes)
             );
+
+            String actorName = taskNotificationService.actorName(actorId);
+            if (!Objects.equals(request.assigneeId(), oldAssigneeId)) {
+                taskNotificationService.notifyAssigned(actorId, task, actorName);
+            } else {
+                taskNotificationService.notifyUpdated(actorId, task, actorName, String.join("; ", changes));
+            }
         }
 
         return toDto(actorId, task);
@@ -235,6 +247,12 @@ public class TaskService {
                     task.getId(),
                     "Moved task \"" + task.getTitle() + "\" from \"" + sourceColumnName + "\" to \"" + targetColumnName + "\"",
                     null
+            );
+            taskNotificationService.notifyMoved(
+                    actorId,
+                    task,
+                    taskNotificationService.actorName(actorId),
+                    "moved the task from \"" + sourceColumnName + "\" to \"" + targetColumnName + "\""
             );
         }
 

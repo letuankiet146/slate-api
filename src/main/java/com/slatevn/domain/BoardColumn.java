@@ -25,6 +25,10 @@ public class BoardColumn {
     @Column(nullable = false)
     private int position;
 
+    /** TODO | IN_PROGRESS | DONE for the three seeded columns; null for custom. */
+    @Column(name = "system_key")
+    private String systemKey;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -66,6 +70,14 @@ public class BoardColumn {
 
     public void setPosition(int position) {
         this.position = position;
+    }
+
+    public String getSystemKey() {
+        return systemKey;
+    }
+
+    public void setSystemKey(String systemKey) {
+        this.systemKey = systemKey;
     }
 
     public Instant getCreatedAt() {

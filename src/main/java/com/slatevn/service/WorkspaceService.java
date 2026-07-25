@@ -182,13 +182,7 @@ public class WorkspaceService {
         workspace.setDeletedBy(null);
         workspaceRepository.save(workspace);
 
-        boardRepository.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
-                .filter(Board::isDeleted)
-                .forEach(board -> {
-                    board.setDeletedAt(null);
-                    board.setDeletedBy(null);
-                    boardRepository.save(board);
-                });
+        boardService.restoreBoardsInWorkspace(workspaceId);
 
         activityLogService.log(
                 workspaceId,

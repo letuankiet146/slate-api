@@ -20,6 +20,7 @@ import com.slatevn.dto.ColumnDto;
 import com.slatevn.dto.CreateBoardRequest;
 import com.slatevn.dto.CreateColumnRequest;
 import com.slatevn.dto.FieldDefinitionDto;
+import com.slatevn.dto.RenameColumnRequest;
 import com.slatevn.dto.TaskDto;
 import com.slatevn.dto.TaskFieldValueDto;
 import com.slatevn.dto.TaskTemplateDto;
@@ -49,6 +50,9 @@ import java.util.stream.Collectors;
 public class BoardService {
 
     public static final String DEFAULT_TODO_COLUMN_NAME = "Cần làm";
+    public static final String SYSTEM_TODO = "TODO";
+    public static final String SYSTEM_IN_PROGRESS = "IN_PROGRESS";
+    public static final String SYSTEM_DONE = "DONE";
 
     private final BoardRepository boardRepository;
     private final WorkspaceRepository workspaceRepository;
@@ -277,14 +281,45 @@ public class BoardService {
     public ColumnDto createColumn(UUID actorId, UUID boardId, CreateColumnRequest request) {
         authorizationService.requireBoardPermission(actorId, boardId, PermissionCodes.BOARD_MANAGE);
         ensureBoard(boardId);
-        int position = request.position() != null
-                ? request.position()
-                : columnRepository.findByBoardIdOrderByPositionAsc(boardId).size();
+
+        List<BoardColumn> existing = columnRepository.findByBoardIdOrderByPositionAsc(boardId);
+        BoardColumn doneColumn = existing.stream()
+                .filter(c -> SYSTEM_DONE.equals(c.getSystemKey()))
+                .findFirst()
+                .orElse(null);
+
+        int insertAt;
+        if (request.position() != null) {
+            insertAt = Math.max(0, Math.min(request.position(), existing.size()));
+        } else if (doneColumn != null) {
+            insertAt = doneColumn.getPosition();
+        } else {
+            insertAt = existing.size();
+        }
+
+        // Never insert after the Done column — keep Done last.
+        if (doneColumn != null && insertAt > doneColumn.getPosition()) {
+            insertAt = doneColumn.getPosition();
+        }
+        if (doneColumn != null && insertAt == existing.size()) {
+            insertAt = doneColumn.getPosition();
+        }
+
+        for (BoardColumn column : existing) {
+            if (column.getPosition() >= insertAt) {
+                column.setPosition(column.getPosition() + 1);
+                columnRepository.save(column);
+            }
+        }
+
         BoardColumn column = new BoardColumn();
         column.setBoardId(boardId);
         column.setName(request.name().trim());
-        column.setPosition(position);
+        column.setPosition(insertAt);
+        column.setSystemKey(null);
         BoardColumn saved = columnRepository.save(column);
+
+        reindexColumns(boardId);
 
         Board board = boardRepository.findById(boardId)
                 .orElseThrow(() -> new NotFoundException("Board not found"));
@@ -301,6 +336,42 @@ public class BoardService {
                 null
         );
 
+        return toColumnDto(
+                columnRepository.findByIdAndBoardId(saved.getId(), boardId)
+                        .orElse(saved)
+        );
+    }
+
+    @Transactional
+    public ColumnDto renameColumn(UUID actorId, UUID boardId, UUID columnId, RenameColumnRequest request) {
+        authorizationService.requireBoardPermission(actorId, boardId, PermissionCodes.BOARD_MANAGE);
+        ensureBoard(boardId);
+
+        BoardColumn column = columnRepository.findByIdAndBoardId(columnId, boardId)
+                .orElseThrow(() -> new NotFoundException("Column not found"));
+        if (column.getSystemKey() != null) {
+            throw new com.slatevn.web.BadRequestException("Default status columns cannot be renamed");
+        }
+
+        String previous = column.getName();
+        column.setName(request.name().trim());
+        BoardColumn saved = columnRepository.save(column);
+
+        Board board = boardRepository.findById(boardId)
+                .orElseThrow(() -> new NotFoundException("Board not found"));
+        activityLogService.log(
+                board.getWorkspaceId(),
+                ActivityScopeLevel.BOARD,
+                boardId,
+                null,
+                actorId,
+                ActivityAction.UPDATE,
+                ActivityEntityType.COLUMN,
+                saved.getId(),
+                "Renamed column \"" + previous + "\" to \"" + saved.getName() + "\"",
+                null
+        );
+
         return toColumnDto(saved);
     }
 
@@ -311,6 +382,9 @@ public class BoardService {
 
         BoardColumn column = columnRepository.findByIdAndBoardId(columnId, boardId)
                 .orElseThrow(() -> new NotFoundException("Column not found"));
+        if (column.getSystemKey() != null) {
+            throw new com.slatevn.web.BadRequestException("Default status columns cannot be deleted");
+        }
         String columnName = column.getName();
         Board board = boardRepository.findById(boardId)
                 .orElseThrow(() -> new NotFoundException("Board not found"));
@@ -344,12 +418,7 @@ public class BoardService {
                 null
         );
 
-        List<BoardColumn> remaining = columnRepository.findByBoardIdOrderByPositionAsc(boardId);
-        for (int i = 0; i < remaining.size(); i++) {
-            BoardColumn remainingColumn = remaining.get(i);
-            remainingColumn.setPosition(i);
-            columnRepository.save(remainingColumn);
-        }
+        reindexColumns(boardId);
     }
 
     @Transactional
@@ -376,8 +445,19 @@ public class BoardService {
             throw new com.slatevn.web.BadRequestException("Duplicate columnIds");
         }
 
-        for (int i = 0; i < columnIds.size(); i++) {
-            BoardColumn column = byId.get(columnIds.get(i));
+        List<UUID> ordered = new ArrayList<>(columnIds);
+        UUID doneId = existing.stream()
+                .filter(c -> SYSTEM_DONE.equals(c.getSystemKey()))
+                .map(BoardColumn::getId)
+                .findFirst()
+                .orElse(null);
+        if (doneId != null) {
+            ordered.remove(doneId);
+            ordered.add(doneId);
+        }
+
+        for (int i = 0; i < ordered.size(); i++) {
+            BoardColumn column = byId.get(ordered.get(i));
             column.setPosition(i);
             columnRepository.save(column);
         }
@@ -442,11 +522,7 @@ public class BoardService {
     public void restoreBoardsInWorkspace(UUID workspaceId) {
         boardRepository.findByWorkspaceIdOrderByNameAsc(workspaceId).stream()
                 .filter(Board::isDeleted)
-                .forEach(board -> {
-                    board.setDeletedAt(null);
-                    board.setDeletedBy(null);
-                    boardRepository.save(board);
-                });
+                .forEach(this::restoreBoardCascade);
     }
 
     @Transactional
@@ -459,9 +535,7 @@ public class BoardService {
         authorizationService.requireWorkspaceAdmin(actorId, board.getWorkspaceId());
         requireActiveWorkspace(board.getWorkspaceId());
 
-        board.setDeletedAt(null);
-        board.setDeletedBy(null);
-        boardRepository.save(board);
+        restoreBoardCascade(board);
 
         activityLogService.log(
                 board.getWorkspaceId(),
@@ -496,7 +570,7 @@ public class BoardService {
         for (Task task : tasks) {
             task.setDeletedAt(deletedAt);
             task.setDeletedBy(actorId);
-            task.setColumnId(null);
+            // Keep columnId so restore can put cards back in their original columns.
             taskRepository.save(task);
         }
         board.setDeletedAt(deletedAt);
@@ -504,14 +578,77 @@ public class BoardService {
         boardRepository.save(board);
     }
 
+    private void restoreBoardCascade(Board board) {
+        Instant cascadeDeletedAt = board.getDeletedAt();
+        board.setDeletedAt(null);
+        board.setDeletedBy(null);
+        boardRepository.save(board);
+        if (cascadeDeletedAt != null) {
+            restoreCascadeDeletedTasks(board.getId(), cascadeDeletedAt);
+        }
+    }
+
+    /**
+     * Restores tasks soft-deleted together with the board (same deletedAt stamp).
+     * Tasks deleted individually earlier stay in the trash.
+     */
+    private void restoreCascadeDeletedTasks(UUID boardId, Instant cascadeDeletedAt) {
+        List<BoardColumn> columns = columnRepository.findByBoardIdOrderByPositionAsc(boardId);
+        Set<UUID> columnIds = columns.stream().map(BoardColumn::getId).collect(Collectors.toSet());
+        UUID fallbackColumnId = columns.stream()
+                .filter(c -> SYSTEM_TODO.equals(c.getSystemKey())
+                        || DEFAULT_TODO_COLUMN_NAME.equals(c.getName()))
+                .map(BoardColumn::getId)
+                .findFirst()
+                .orElse(columns.isEmpty() ? null : columns.getFirst().getId());
+
+        List<Task> deletedTasks = taskRepository.findByBoardIdAndDeletedAtIsNotNullOrderByDeletedAtDesc(boardId);
+        for (Task task : deletedTasks) {
+            if (!cascadeDeletedAt.equals(task.getDeletedAt())) {
+                continue;
+            }
+            task.setDeletedAt(null);
+            task.setDeletedBy(null);
+            if (task.getColumnId() == null || !columnIds.contains(task.getColumnId())) {
+                if (fallbackColumnId == null) {
+                    throw new com.slatevn.web.BadRequestException(
+                            "Board has no columns to restore tasks into");
+                }
+                task.setColumnId(fallbackColumnId);
+            }
+            taskRepository.save(task);
+        }
+    }
+
     private void createDefaultColumns(UUID boardId) {
         String[] names = {DEFAULT_TODO_COLUMN_NAME, "Đang làm", "Hoàn thành"};
+        String[] keys = {SYSTEM_TODO, SYSTEM_IN_PROGRESS, SYSTEM_DONE};
         for (int i = 0; i < names.length; i++) {
             BoardColumn column = new BoardColumn();
             column.setBoardId(boardId);
             column.setName(names[i]);
             column.setPosition(i);
+            column.setSystemKey(keys[i]);
             columnRepository.save(column);
+        }
+    }
+
+    private void reindexColumns(UUID boardId) {
+        List<BoardColumn> columns = columnRepository.findByBoardIdOrderByPositionAsc(boardId);
+        BoardColumn done = columns.stream()
+                .filter(c -> SYSTEM_DONE.equals(c.getSystemKey()))
+                .findFirst()
+                .orElse(null);
+        if (done != null) {
+            columns.remove(done);
+            columns.add(done);
+        }
+        for (int i = 0; i < columns.size(); i++) {
+            BoardColumn column = columns.get(i);
+            if (column.getPosition() != i) {
+                column.setPosition(i);
+                columnRepository.save(column);
+            }
         }
     }
 
@@ -548,7 +685,7 @@ public class BoardService {
     }
 
     private ColumnDto toColumnDto(BoardColumn c) {
-        return new ColumnDto(c.getId(), c.getBoardId(), c.getName(), c.getPosition());
+        return new ColumnDto(c.getId(), c.getBoardId(), c.getName(), c.getPosition(), c.getSystemKey());
     }
 
     static TaskFieldValueDto toTaskFieldDto(FieldDefinition def, String value) {

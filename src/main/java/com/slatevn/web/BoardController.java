@@ -6,6 +6,7 @@ import com.slatevn.dto.BoardViewDto;
 import com.slatevn.dto.ColumnDto;
 import com.slatevn.dto.CreateBoardRequest;
 import com.slatevn.dto.CreateColumnRequest;
+import com.slatevn.dto.RenameColumnRequest;
 import com.slatevn.dto.CreateTaskRequest;
 import com.slatevn.dto.ReorderColumnsRequest;
 import com.slatevn.dto.TaskDto;
@@ -103,6 +104,20 @@ public class BoardController {
             @Valid @RequestBody CreateColumnRequest request
     ) {
         return boardService.createColumn(SecurityUtils.currentUser().getId(), boardId, request);
+    }
+
+    @PutMapping("/boards/{boardId}/columns/{columnId}")
+    public ColumnDto renameColumn(
+            @PathVariable UUID boardId,
+            @PathVariable UUID columnId,
+            @Valid @RequestBody RenameColumnRequest request
+    ) {
+        return boardService.renameColumn(
+                SecurityUtils.currentUser().getId(),
+                boardId,
+                columnId,
+                request
+        );
     }
 
     @PutMapping("/boards/{boardId}/columns/reorder")

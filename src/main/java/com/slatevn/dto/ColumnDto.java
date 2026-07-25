@@ -6,6 +6,7 @@ public record ColumnDto(
         UUID id,
         UUID boardId,
         String name,
-        int position
+        int position,
+        String systemKey
 ) {
 }

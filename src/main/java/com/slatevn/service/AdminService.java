@@ -1,6 +1,5 @@
 package com.slatevn.service;
 
-import com.slatevn.domain.AccountType;
 import com.slatevn.domain.Membership;
 import com.slatevn.domain.PermissionCodes;
 import com.slatevn.domain.Role;
@@ -69,7 +68,6 @@ public class AdminService {
         user.setDisplayName(request.displayName());
         user.setLocale(request.locale() != null && !request.locale().isBlank() ? request.locale() : "vi");
         user.setEnabled(true);
-        user.setAccountType(AccountType.OWNER);
         userRepository.save(user);
 
         Workspace workspace = new Workspace();
@@ -77,11 +75,6 @@ public class AdminService {
         workspace.setKey(request.workspaceKey().toUpperCase());
         workspace.setCreatedBy(actorId);
         workspace.setOwnerId(user.getId());
-        String companyEmail = request.companyEmail();
-        if (companyEmail == null || companyEmail.isBlank()) {
-            companyEmail = request.email();
-        }
-        workspace.setCompanyEmail(companyEmail.toLowerCase());
         workspaceRepository.save(workspace);
         taskTemplateService.ensureDefaultTemplate(workspace.getId());
 

@@ -36,8 +36,6 @@ import com.slatevn.repository.TaskRepository;
 
 import com.slatevn.repository.UserRepository;
 
-import com.slatevn.repository.WorkspaceJoinRequestRepository;
-
 import com.slatevn.repository.WorkspaceRepository;
 
 import com.slatevn.web.BadRequestException;
@@ -84,8 +82,6 @@ public class UserService {
 
     private final RefreshTokenRepository refreshTokenRepository;
 
-    private final WorkspaceJoinRequestRepository joinRequestRepository;
-
     private final AuthorizationService authorizationService;
 
     private final PasswordEncoder passwordEncoder;
@@ -110,8 +106,6 @@ public class UserService {
 
             RefreshTokenRepository refreshTokenRepository,
 
-            WorkspaceJoinRequestRepository joinRequestRepository,
-
             AuthorizationService authorizationService,
 
             PasswordEncoder passwordEncoder
@@ -133,8 +127,6 @@ public class UserService {
         this.taskRepository = taskRepository;
 
         this.refreshTokenRepository = refreshTokenRepository;
-
-        this.joinRequestRepository = joinRequestRepository;
 
         this.authorizationService = authorizationService;
 
@@ -203,8 +195,6 @@ public class UserService {
         user.setLocale(request.locale() != null && !request.locale().isBlank() ? request.locale() : "vi");
 
         user.setEnabled(true);
-
-        user.setAccountType(com.slatevn.domain.AccountType.OWNER);
 
         userRepository.save(user);
 
@@ -557,14 +547,6 @@ public class UserService {
             other.setCreatedByUserId(null);
 
             userRepository.save(other);
-
-        });
-
-        joinRequestRepository.findByReviewedBy(id).forEach(request -> {
-
-            request.setReviewedBy(null);
-
-            joinRequestRepository.save(request);
 
         });
 

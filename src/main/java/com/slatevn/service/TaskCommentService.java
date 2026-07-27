@@ -56,7 +56,7 @@ public class TaskCommentService {
     @Transactional
     public TaskCommentDto create(UUID actorId, UUID taskId, CreateTaskCommentRequest request) {
         Task task = requireViewableTask(actorId, taskId);
-        requireCanParticipate(actorId, task.getBoardId());
+        requireCanParticipate(actorId, task);
 
         User author = userRepository.findById(actorId)
                 .orElseThrow(() -> new NotFoundException("User not found"));
@@ -93,7 +93,7 @@ public class TaskCommentService {
         if (!comment.getAuthorId().equals(actorId)) {
             throw new ForbiddenException("Only the author can edit this comment");
         }
-        requireCanParticipate(actorId, task.getBoardId());
+        requireCanParticipate(actorId, task);
 
         String previousBody = comment.getBody();
         String body = request.body().trim();
@@ -134,19 +134,12 @@ public class TaskCommentService {
     }
 
     private void requireCanViewTask(UUID actorId, Task task) {
-        if (!authorizationService.hasBoardPermission(actorId, task.getBoardId(), PermissionCodes.TASK_VIEW)
-                && !authorizationService.hasBoardPermission(actorId, task.getBoardId(), PermissionCodes.TASK_VIEW_PUBLIC)
-                && !authorizationService.hasBoardPermission(actorId, task.getBoardId(), PermissionCodes.BOARD_MANAGE)) {
-            throw new ForbiddenException("No access to task");
-        }
+        authorizationService.requireCanViewTask(actorId, task);
     }
 
-    private void requireCanParticipate(UUID actorId, UUID boardId) {
-        if (!authorizationService.hasBoardPermission(actorId, boardId, PermissionCodes.TASK_VIEW)
-                && !authorizationService.hasBoardPermission(actorId, boardId, PermissionCodes.TASK_VIEW_PUBLIC)
-                && !authorizationService.hasBoardPermission(actorId, boardId, PermissionCodes.TASK_UPDATE)
-                && !authorizationService.hasBoardPermission(actorId, boardId, PermissionCodes.BOARD_MANAGE)) {
-            throw new ForbiddenException("No access to task");
+    private void requireCanParticipate(UUID actorId, Task task) {
+        if (!authorizationService.canCommentOnTask(actorId, task)) {
+            throw new ForbiddenException("Cannot comment on task");
         }
     }
 

@@ -8,6 +8,7 @@ import com.slatevn.domain.BoardColumn;
 import com.slatevn.domain.FieldDefinition;
 import com.slatevn.domain.Membership;
 import com.slatevn.domain.PermissionCodes;
+import com.slatevn.domain.RoleCodes;
 import com.slatevn.domain.ScopeType;
 import com.slatevn.domain.Task;
 import com.slatevn.domain.TaskFieldValue;
@@ -20,6 +21,7 @@ import com.slatevn.dto.ColumnDto;
 import com.slatevn.dto.CreateBoardRequest;
 import com.slatevn.dto.CreateColumnRequest;
 import com.slatevn.dto.FieldDefinitionDto;
+import com.slatevn.dto.ManagedBoardDto;
 import com.slatevn.dto.RenameColumnRequest;
 import com.slatevn.dto.TaskDto;
 import com.slatevn.dto.TaskFieldValueDto;
@@ -34,9 +36,11 @@ import com.slatevn.repository.TaskRepository;
 import com.slatevn.repository.TaskTemplateRepository;
 import com.slatevn.repository.WorkspaceRepository;
 import com.slatevn.web.NotFoundException;
+import com.slatevn.web.ForbiddenException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Comparator;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -101,6 +105,40 @@ public class BoardService {
                         || authorizationService.hasBoardPermission(actorId, b.getId(), PermissionCodes.TASK_VIEW_PUBLIC))
                 .map(this::toDto)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<ManagedBoardDto> listManaged(UUID actorId) {
+        if (!authorizationService.canAccessManagedBoards(actorId)) {
+            throw new ForbiddenException("Board admin role required");
+        }
+        List<ManagedBoardDto> boards = new ArrayList<>();
+        for (UUID boardId : authorizationService.visibleBoardIds(actorId)) {
+            if (!authorizationService.canManageBoard(actorId, boardId)) {
+                continue;
+            }
+            Board board = boardRepository.findById(boardId).orElse(null);
+            if (board == null || board.isDeleted()) {
+                continue;
+            }
+            Workspace workspace = workspaceRepository.findById(board.getWorkspaceId()).orElse(null);
+            if (workspace == null || workspace.isDeleted()) {
+                continue;
+            }
+            boards.add(new ManagedBoardDto(
+                    board.getId(),
+                    board.getWorkspaceId(),
+                    workspace.getKey(),
+                    workspace.getName(),
+                    board.getName(),
+                    board.getCreatedBy(),
+                    board.getCreatedAt()
+            ));
+        }
+        boards.sort(Comparator
+                .comparing(ManagedBoardDto::workspaceName, String.CASE_INSENSITIVE_ORDER)
+                .thenComparing(ManagedBoardDto::name, String.CASE_INSENSITIVE_ORDER));
+        return boards;
     }
 
     @Transactional
@@ -211,6 +249,9 @@ public class BoardService {
 
         List<TaskDto> taskDtos = new ArrayList<>();
         for (Task task : tasks) {
+            if (!authorizationService.canViewTask(actorId, task)) {
+                continue;
+            }
             Map<UUID, String> values = valuesByTask.getOrDefault(task.getId(), List.of()).stream()
                     .collect(Collectors.toMap(
                             TaskFieldValue::getFieldDefinitionId,
@@ -258,23 +299,47 @@ public class BoardService {
             throw new com.slatevn.web.ForbiddenException("No access to board");
         }
 
+        if (authorizationService.isAssigneeOnlyOnBoard(actorId, boardId)) {
+            return membershipRepository.findByUserId(actorId).stream()
+                    .findFirst()
+                    .map(m -> List.of(new BoardMemberDto(
+                            m.getUser().getId(),
+                            m.getUser().getEmail(),
+                            m.getUser().getDisplayName(),
+                            m.getUser().getAvatarUrl())))
+                    .orElse(List.of());
+        }
+
         List<Membership> memberships = membershipRepository.findByWorkspaceId(board.getWorkspaceId());
         Map<UUID, BoardMemberDto> members = new LinkedHashMap<>();
+        UUID workspaceId = board.getWorkspaceId();
         for (Membership m : memberships) {
-            if (m.getScopeType() == ScopeType.WORKSPACE
-                    || (m.getScopeType() == ScopeType.BOARD && boardId.equals(m.getBoardId()))) {
-                members.putIfAbsent(
-                        m.getUser().getId(),
-                        new BoardMemberDto(
-                                m.getUser().getId(),
-                                m.getUser().getEmail(),
-                                m.getUser().getDisplayName(),
-                                m.getUser().getAvatarUrl()
-                        )
-                );
+            if (!isAssignableBoardMember(m, workspaceId, boardId)) {
+                continue;
             }
+            members.putIfAbsent(
+                    m.getUser().getId(),
+                    new BoardMemberDto(
+                            m.getUser().getId(),
+                            m.getUser().getEmail(),
+                            m.getUser().getDisplayName(),
+                            m.getUser().getAvatarUrl()
+                    )
+            );
         }
         return new ArrayList<>(members.values());
+    }
+
+    private boolean isAssignableBoardMember(Membership membership, UUID workspaceId, UUID boardId) {
+        if (membership.getScopeType() == ScopeType.WORKSPACE && workspaceId.equals(membership.getWorkspaceId())) {
+            return true;
+        }
+        if (membership.getScopeType() == ScopeType.BOARD && boardId.equals(membership.getBoardId())) {
+            return true;
+        }
+        return membership.getScopeType() == ScopeType.BOARD
+                && workspaceId.equals(membership.getWorkspaceId())
+                && RoleCodes.BOARD_ADMIN.equals(membership.getRole().getCode());
     }
 
     @Transactional

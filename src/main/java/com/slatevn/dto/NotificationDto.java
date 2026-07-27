@@ -11,7 +11,6 @@ public record NotificationDto(
         String body,
         boolean read,
         Instant createdAt,
-        WorkspaceJoinRequestDto joinRequest,
         TaskNotificationContextDto task
 ) {
 }

@@ -2,8 +2,6 @@ package com.slatevn.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
@@ -25,10 +23,6 @@ public class User {
     @Column(name = "password_hash")
     private String passwordHash;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "account_type", nullable = false)
-    private AccountType accountType = AccountType.OWNER;
-
     @Column(name = "google_sub")
     private String googleSub;
 
@@ -46,6 +40,9 @@ public class User {
 
     @Column(nullable = false)
     private boolean enabled = true;
+
+    @Column(name = "must_change_password", nullable = false)
+    private boolean mustChangePassword = false;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -98,14 +95,6 @@ public class User {
         this.passwordHash = passwordHash;
     }
 
-    public AccountType getAccountType() {
-        return accountType;
-    }
-
-    public void setAccountType(AccountType accountType) {
-        this.accountType = accountType;
-    }
-
     public String getGoogleSub() {
         return googleSub;
     }
@@ -152,6 +141,14 @@ public class User {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public boolean isMustChangePassword() {
+        return mustChangePassword;
+    }
+
+    public void setMustChangePassword(boolean mustChangePassword) {
+        this.mustChangePassword = mustChangePassword;
     }
 
     public Instant getCreatedAt() {

@@ -11,7 +11,6 @@ public record ProvisionTenantRequest(
         @NotBlank @Size(max = 255) String displayName,
         String locale,
         @NotBlank @Size(max = 255) String workspaceName,
-        @NotBlank @Size(min = 2, max = 32) @Pattern(regexp = "^[A-Za-z0-9_-]+$") String workspaceKey,
-        @Email String companyEmail
+        @NotBlank @Size(min = 2, max = 32) @Pattern(regexp = "^[A-Za-z0-9_-]+$") String workspaceKey
 ) {
 }

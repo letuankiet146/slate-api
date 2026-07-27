@@ -7,6 +7,7 @@ import com.slatevn.dto.CreateInternalUserRequest;
 import com.slatevn.dto.CreateWorkspaceRequest;
 import com.slatevn.dto.MembershipDto;
 import com.slatevn.dto.SaveTaskTemplateRequest;
+import com.slatevn.dto.SyncMemberBoardsRequest;
 import com.slatevn.dto.TaskTemplateDto;
 import com.slatevn.dto.UpdateMembershipRequest;
 import com.slatevn.dto.UpdateWorkspaceRequest;
@@ -98,7 +99,7 @@ public class WorkspaceController {
     }
 
     @PostMapping("/{id}/internal-users")
-    public MembershipDto createInternalUser(
+    public List<MembershipDto> createInternalUser(
             @PathVariable UUID id,
             @Valid @RequestBody CreateInternalUserRequest request
     ) {
@@ -138,6 +139,20 @@ public class WorkspaceController {
             @RequestParam String email
     ) {
         return workspaceService.lookupMemberByEmail(SecurityUtils.currentUser().getId(), id, email);
+    }
+
+    @PutMapping("/{id}/members/{userId}/boards")
+    public void syncMemberBoards(
+            @PathVariable UUID id,
+            @PathVariable UUID userId,
+            @Valid @RequestBody SyncMemberBoardsRequest request
+    ) {
+        workspaceService.syncMemberBoards(
+                SecurityUtils.currentUser().getId(),
+                id,
+                userId,
+                request
+        );
     }
 
     @DeleteMapping("/{id}/memberships/{membershipId}")

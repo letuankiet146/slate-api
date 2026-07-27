@@ -76,7 +76,7 @@ public class AuthController {
     }
 
     @PostMapping("/change-password")
-    public void changePassword(@Valid @RequestBody ChangePasswordRequest request) {
-        authService.changePassword(SecurityUtils.currentUser().getId(), request);
+    public AuthResponse.UserResponse changePassword(@Valid @RequestBody ChangePasswordRequest request) {
+        return authService.changePassword(SecurityUtils.currentUser().getId(), request);
     }
 }

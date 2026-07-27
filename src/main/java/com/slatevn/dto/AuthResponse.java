@@ -20,8 +20,9 @@ public record AuthResponse(
             String avatarUrl,
             String locale,
             boolean enabled,
-            String accountType,
-            List<String> systemPermissions
+            boolean mustChangePassword,
+            List<String> systemPermissions,
+            UserSessionDto session
     ) {
     }
 }

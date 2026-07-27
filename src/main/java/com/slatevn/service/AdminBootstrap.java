@@ -1,7 +1,6 @@
 package com.slatevn.service;
 
 import com.slatevn.config.BootstrapProperties;
-import com.slatevn.domain.AccountType;
 import com.slatevn.domain.Membership;
 import com.slatevn.domain.Role;
 import com.slatevn.domain.ScopeType;
@@ -57,7 +56,6 @@ public class AdminBootstrap implements ApplicationRunner {
         admin.setDisplayName(properties.adminDisplayName());
         admin.setLocale("vi");
         admin.setEnabled(true);
-        admin.setAccountType(AccountType.OWNER);
         userRepository.save(admin);
 
         Membership membership = new Membership();

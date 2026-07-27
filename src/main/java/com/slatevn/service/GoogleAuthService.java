@@ -5,7 +5,6 @@ import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
 import com.slatevn.config.GoogleProperties;
-import com.slatevn.domain.AccountType;
 import com.slatevn.domain.User;
 import com.slatevn.dto.AuthResponse;
 import com.slatevn.repository.UserRepository;
@@ -63,9 +62,6 @@ public class GoogleAuthService {
             if (existing.isDeleted()) {
                 throw new BadRequestException("Account has been deleted");
             }
-            if (existing.getAccountType() == AccountType.INTERNAL) {
-                throw new BadRequestException("Internal users must sign in with email and password");
-            }
             if (existing.getGoogleSub() == null) {
                 existing.setGoogleSub(googleSub);
                 applyGooglePictureIfMissing(existing, payload);
@@ -81,7 +77,6 @@ public class GoogleAuthService {
         user.setDisplayName(resolveDisplayName(payload));
         user.setLocale("vi");
         user.setEnabled(true);
-        user.setAccountType(AccountType.OWNER);
         user.setGoogleSub(googleSub);
         user.setAvatarUrl(resolvePicture(payload));
         userRepository.save(user);

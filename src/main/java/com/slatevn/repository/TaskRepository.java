@@ -24,5 +24,9 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
 
     List<Task> findByAssigneeId(UUID assigneeId);
 
+    boolean existsByAssigneeIdAndDeletedAtIsNull(UUID assigneeId);
+
+    long countByBoardIdAndAssigneeIdAndDeletedAtIsNull(UUID boardId, UUID assigneeId);
+
     List<Task> findByDeletedBy(UUID deletedBy);
 }

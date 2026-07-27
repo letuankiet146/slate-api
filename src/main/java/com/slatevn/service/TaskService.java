@@ -53,6 +53,7 @@ public class TaskService {
     private final AuthorizationService authorizationService;
     private final ActivityLogService activityLogService;
     private final TaskNotificationService taskNotificationService;
+    private final BoardMemberAccessService boardMemberAccessService;
 
     public TaskService(
             TaskRepository taskRepository,
@@ -65,7 +66,8 @@ public class TaskService {
             UserRepository userRepository,
             AuthorizationService authorizationService,
             ActivityLogService activityLogService,
-            TaskNotificationService taskNotificationService
+            TaskNotificationService taskNotificationService,
+            BoardMemberAccessService boardMemberAccessService
     ) {
         this.taskRepository = taskRepository;
         this.boardRepository = boardRepository;
@@ -78,12 +80,13 @@ public class TaskService {
         this.authorizationService = authorizationService;
         this.activityLogService = activityLogService;
         this.taskNotificationService = taskNotificationService;
+        this.boardMemberAccessService = boardMemberAccessService;
     }
 
     @Transactional
     public TaskDto create(UUID actorId, UUID boardId, CreateTaskRequest request) {
         ensureBoard(boardId);
-        authorizationService.requireBoardPermission(actorId, boardId, PermissionCodes.TASK_CREATE);
+        authorizationService.requireCanCreateTask(actorId, boardId);
 
         TaskTemplate template = templateRepository.findById(request.templateId())
                 .orElseThrow(() -> new BadRequestException("Invalid template for board"));
@@ -137,13 +140,15 @@ public class TaskService {
 
         taskNotificationService.notifyAssigned(actorId, task, creator.getDisplayName());
 
+        boardMemberAccessService.onTaskAssigneeSet(boardId, request.assigneeId());
+
         return toDto(actorId, task);
     }
 
     @Transactional
     public TaskDto update(UUID actorId, UUID taskId, UpdateTaskRequest request) {
         Task task = requireActiveTask(taskId);
-        authorizationService.requireBoardPermission(actorId, task.getBoardId(), PermissionCodes.TASK_UPDATE);
+        authorizationService.requireCanUpdateTask(actorId, task);
 
         String oldTitle = task.getTitle();
         String oldDescription = task.getDescription();
@@ -156,6 +161,10 @@ public class TaskService {
         }
         if (request.description() != null) {
             task.setDescription(request.description());
+        }
+        if (!Objects.equals(request.assigneeId(), oldAssigneeId)
+                && !authorizationService.canChangeTaskAssignee(actorId, task)) {
+            throw new ForbiddenException("Cannot change task assignee");
         }
         task.setAssigneeId(request.assigneeId());
         taskRepository.save(task);
@@ -206,13 +215,18 @@ public class TaskService {
             }
         }
 
+        if (!Objects.equals(request.assigneeId(), oldAssigneeId)) {
+            boardMemberAccessService.onTaskAssigneeCleared(task.getBoardId(), oldAssigneeId);
+            boardMemberAccessService.onTaskAssigneeSet(task.getBoardId(), request.assigneeId());
+        }
+
         return toDto(actorId, task);
     }
 
     @Transactional
     public TaskDto move(UUID actorId, UUID taskId, MoveTaskRequest request) {
         Task task = requireActiveTask(taskId);
-        authorizationService.requireBoardPermission(actorId, task.getBoardId(), PermissionCodes.TASK_UPDATE);
+        authorizationService.requireCanUpdateTask(actorId, task);
 
         columnRepository.findByIdAndBoardId(request.columnId(), task.getBoardId())
                 .orElseThrow(() -> new BadRequestException("Invalid column for board"));
@@ -266,11 +280,7 @@ public class TaskService {
         if (task.isDeleted()) {
             throw new NotFoundException("Task not found");
         }
-        if (!authorizationService.hasBoardPermission(actorId, task.getBoardId(), PermissionCodes.TASK_VIEW)
-                && !authorizationService.hasBoardPermission(actorId, task.getBoardId(), PermissionCodes.TASK_VIEW_PUBLIC)
-                && !authorizationService.hasBoardPermission(actorId, task.getBoardId(), PermissionCodes.BOARD_MANAGE)) {
-            throw new ForbiddenException("No access to task");
-        }
+        authorizationService.requireCanViewTask(actorId, task);
         return toDto(actorId, task);
     }
 
@@ -348,6 +358,8 @@ public class TaskService {
         task.setPosition(taskRepository.findByColumnIdAndDeletedAtIsNullOrderByPositionAsc(todoColumn.getId()).size());
         taskRepository.save(task);
 
+        boardMemberAccessService.onTaskAssigneeSet(targetBoardId, task.getAssigneeId());
+
         UUID workspaceId = resolveWorkspaceId(targetBoardId);
         activityLogService.log(
                 workspaceId,
@@ -381,9 +393,11 @@ public class TaskService {
     @Transactional
     public void softDelete(UUID actorId, UUID taskId) {
         Task task = requireActiveTask(taskId);
-        authorizationService.requireBoardPermission(actorId, task.getBoardId(), PermissionCodes.TASK_UPDATE);
+        authorizationService.requireCanDeleteTask(actorId, task);
 
         UUID columnId = task.getColumnId();
+        UUID assigneeId = task.getAssigneeId();
+        UUID boardId = task.getBoardId();
         task.setDeletedAt(Instant.now());
         task.setDeletedBy(actorId);
         taskRepository.save(task);
@@ -406,6 +420,8 @@ public class TaskService {
             List<Task> remaining = taskRepository.findByColumnIdAndDeletedAtIsNullOrderByPositionAsc(columnId);
             reindex(remaining);
         }
+
+        boardMemberAccessService.onTaskAssigneeCleared(boardId, assigneeId);
     }
 
     @Transactional
@@ -417,8 +433,12 @@ public class TaskService {
         }
         authorizationService.requireBoardPermission(actorId, task.getBoardId(), PermissionCodes.BOARD_MANAGE);
 
+        UUID boardId = task.getBoardId();
+        UUID assigneeId = task.getAssigneeId();
         taskFieldValueRepository.deleteByTaskId(taskId);
         taskRepository.delete(task);
+
+        boardMemberAccessService.onTaskAssigneeCleared(boardId, assigneeId);
     }
 
     private Task requireActiveTask(UUID taskId) {

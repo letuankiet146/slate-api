@@ -12,6 +12,7 @@ public record MembershipDto(
         String scopeType,
         UUID workspaceId,
         UUID boardId,
-        boolean systemAdmin
+        boolean systemAdmin,
+        boolean roleLocked
 ) {
 }

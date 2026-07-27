@@ -1,7 +1,6 @@
 package com.slatevn.service;
 
 import com.slatevn.config.JwtProperties;
-import com.slatevn.domain.AccountType;
 import com.slatevn.domain.RefreshToken;
 import com.slatevn.domain.ScopeType;
 import com.slatevn.domain.User;
@@ -41,6 +40,7 @@ public class AuthService {
     private final JwtProperties jwtProperties;
     private final PasswordEncoder passwordEncoder;
     private final AvatarStorageService avatarStorageService;
+    private final UserSessionService userSessionService;
 
     public AuthService(
             AuthenticationManager authenticationManager,
@@ -50,7 +50,8 @@ public class AuthService {
             JwtService jwtService,
             JwtProperties jwtProperties,
             PasswordEncoder passwordEncoder,
-            AvatarStorageService avatarStorageService
+            AvatarStorageService avatarStorageService,
+            UserSessionService userSessionService
     ) {
         this.authenticationManager = authenticationManager;
         this.userRepository = userRepository;
@@ -60,6 +61,7 @@ public class AuthService {
         this.jwtProperties = jwtProperties;
         this.passwordEncoder = passwordEncoder;
         this.avatarStorageService = avatarStorageService;
+        this.userSessionService = userSessionService;
     }
 
     @Transactional
@@ -70,7 +72,7 @@ public class AuthService {
             throw new BadRequestException("Account has been deleted");
         }
         if (user.getPasswordHash() == null || user.getPasswordHash().isBlank()) {
-            throw new BadRequestException("This account uses Google Sign-In");
+            throw new BadRequestException("Set a password or use Google Sign-In");
         }
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.email().toLowerCase(), request.password()));
@@ -117,18 +119,20 @@ public class AuthService {
     }
 
     @Transactional
-    public void changePassword(UUID userId, ChangePasswordRequest request) {
+    public AuthResponse.UserResponse changePassword(UUID userId, ChangePasswordRequest request) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new NotFoundException("User not found"));
         if (user.getPasswordHash() == null || user.getPasswordHash().isBlank()) {
-            throw new BadRequestException("This account uses Google Sign-In");
+            throw new BadRequestException("Set a password or use Google Sign-In");
         }
         if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
             throw new BadRequestException("Current password is incorrect");
         }
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        user.setMustChangePassword(false);
         userRepository.save(user);
         refreshTokenRepository.deleteByUserId(userId);
+        return toUserResponse(user);
     }
 
     @Transactional
@@ -196,8 +200,9 @@ public class AuthService {
                 user.getAvatarUrl(),
                 user.getLocale(),
                 user.isEnabled(),
-                user.getAccountType().name(),
-                perms
+                user.isMustChangePassword(),
+                perms,
+                userSessionService.resolveSession(user.getId())
         );
     }
 

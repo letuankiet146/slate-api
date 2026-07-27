@@ -27,7 +27,8 @@ public class RoleService {
     private static final Set<String> BUILT_IN_ROLE_CODES = Set.of(
             RoleCodes.SYSTEM_ADMIN,
             RoleCodes.WORKSPACE_ADMIN,
-            "BOARD_MEMBER",
+            RoleCodes.BOARD_ADMIN,
+            RoleCodes.BOARD_MEMBER,
             RoleCodes.BOARD_VIEWER
     );
 

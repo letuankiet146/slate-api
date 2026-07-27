@@ -11,7 +11,6 @@ public record WorkspaceDetailDto(
         UUID createdBy,
         Instant createdAt,
         List<String> permissions,
-        boolean workspaceAdmin,
-        String companyEmail
+        boolean workspaceAdmin
 ) {
 }

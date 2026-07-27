@@ -116,10 +116,6 @@ public class WorkspaceService {
         Workspace workspace = requireActiveWorkspace(workspaceId);
         String oldName = workspace.getName();
         workspace.setName(request.name().trim());
-        if (request.companyEmail() != null) {
-            String companyEmail = request.companyEmail().trim();
-            workspace.setCompanyEmail(companyEmail.isEmpty() ? null : companyEmail.toLowerCase());
-        }
         workspaceRepository.save(workspace);
 
         if (!oldName.equals(workspace.getName())) {
@@ -133,20 +129,6 @@ public class WorkspaceService {
                     ActivityEntityType.WORKSPACE,
                     workspaceId,
                     "Renamed workspace \"" + oldName + "\" to \"" + workspace.getName() + "\"",
-                    null
-            );
-        }
-        if (request.companyEmail() != null) {
-            activityLogService.log(
-                    workspaceId,
-                    ActivityScopeLevel.WORKSPACE,
-                    null,
-                    null,
-                    actorId,
-                    ActivityAction.UPDATE,
-                    ActivityEntityType.WORKSPACE,
-                    workspaceId,
-                    "Updated company email for workspace \"" + workspace.getName() + "\"",
                     null
             );
         }
@@ -720,8 +702,7 @@ public class WorkspaceService {
                 w.getCreatedBy(),
                 w.getCreatedAt(),
                 List.copyOf(permissions),
-                workspaceAdmin,
-                w.getCompanyEmail()
+                workspaceAdmin
         );
     }
 

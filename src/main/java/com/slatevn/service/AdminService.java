@@ -75,11 +75,6 @@ public class AdminService {
         workspace.setKey(request.workspaceKey().toUpperCase());
         workspace.setCreatedBy(actorId);
         workspace.setOwnerId(user.getId());
-        String companyEmail = request.companyEmail();
-        if (companyEmail == null || companyEmail.isBlank()) {
-            companyEmail = request.email();
-        }
-        workspace.setCompanyEmail(companyEmail.toLowerCase());
         workspaceRepository.save(workspace);
         taskTemplateService.ensureDefaultTemplate(workspace.getId());
 

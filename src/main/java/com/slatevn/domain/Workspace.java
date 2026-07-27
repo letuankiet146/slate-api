@@ -41,9 +41,6 @@ public class Workspace {
     @Column(name = "deleted_by")
     private UUID deletedBy;
 
-    @Column(name = "company_email")
-    private String companyEmail;
-
     @PrePersist
     void onCreate() {
         if (id == null) {
@@ -121,14 +118,6 @@ public class Workspace {
 
     public void setDeletedBy(UUID deletedBy) {
         this.deletedBy = deletedBy;
-    }
-
-    public String getCompanyEmail() {
-        return companyEmail;
-    }
-
-    public void setCompanyEmail(String companyEmail) {
-        this.companyEmail = companyEmail;
     }
 
     public boolean isDeleted() {

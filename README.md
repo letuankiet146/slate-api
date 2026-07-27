@@ -1,6 +1,6 @@
-# Slate API
+# xsolution API
 
-Spring Boot REST API for SlateVN — workspaces, boards, tasks, RBAC, custom fields, JWT auth.
+Spring Boot REST API for xsolution — workspaces, boards, tasks, RBAC, custom fields, JWT auth.
 
 ## Stack
 
